@@ -19,10 +19,13 @@ class EditSnippetRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
 
+# --- FIX #2: The Patch Request now requires CSS and JS to preserve them ---
 class PatchRequest(BaseModel):
     html: str
     parent_selector: str
     new_parent_snippet: str
+    css: str
+    js: str
 
 # --- Configuration ---
 API_KEY = os.environ.get("TOGETHER_API_KEY")
@@ -36,40 +39,22 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE DEFINITIVE FIX: Enhanced Chatter Removal ---
+# --- Helper Functions ---
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    """
-    Recursively removes known AI chatter tags (like <think>) and stray text nodes 
-    that are not just whitespace. This is the definitive cleaning function.
-    """
-    if not soup_or_tag:
-        return
-
-    # A list to hold all nodes we want to remove
+    if not soup_or_tag: return
     nodes_to_remove = []
-    
-    # We must iterate over a static list of children, not a live one.
     for child in list(soup_or_tag.children):
-        # Case 1: It's a text node (NavigableString). If it's not just whitespace, it's chatter.
         if isinstance(child, NavigableString) and child.string.strip():
             nodes_to_remove.append(child)
-        # Case 2: It's an HTML tag. Check its name.
         elif hasattr(child, 'name'):
-            # If it's a known chatter tag, mark it for removal.
             if child.name in ['think', 'thought', 'explanation']:
                 nodes_to_remove.append(child)
-            # Otherwise, recurse into the tag to clean its children.
             else:
                 clean_chatter_and_invalid_tags(child)
-
-    # Now, remove all the chatter nodes we found at this level.
     for node in nodes_to_remove:
         node.decompose()
 
 def clean_html_snippet(text: str) -> str:
-    """Cleans snippets by parsing them and aggressively removing chatter."""
-    # The AI might return just the modified tag, or the parent.
-    # Parsing it directly will handle both cases.
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
     return str(soup)
@@ -82,6 +67,7 @@ def extract_assets(html_content: str) -> tuple:
         
         body_tag = soup.find('body')
         if body_tag:
+            # --- FIX #1: Aggressively clean the body tag during initial build ---
             clean_chatter_and_invalid_tags(body_tag)
             body_content = ''.join(str(c) for c in body_tag.contents)
         else:
@@ -170,14 +156,5 @@ async def patch_html(request: PatchRequest):
 
         body_html = ''.join(str(c) for c in soup.body.contents)
         
-        # We don't return CSS/JS on patch as they are not expected to change.
-        return {"html": body_html, "css": "", "js": ""}
-    except Exception as e:
-        print(f"Patching error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
-
-# Uvicorn runner
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+        # --- FIX #2: Return the original CSS and JS to prevent them from being lost ---
+        return {"html": body_html, "css": request.css, "js": request.js}
