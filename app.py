@@ -19,7 +19,6 @@ class EditSnippetRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
 
-# --- FIX #2: The Patch Request now requires CSS and JS to preserve them ---
 class PatchRequest(BaseModel):
     html: str
     parent_selector: str
@@ -64,15 +63,12 @@ def extract_assets(html_content: str) -> tuple:
         soup = BeautifulSoup(html_content, 'html.parser')
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
-        
         body_tag = soup.find('body')
         if body_tag:
-            # --- FIX #1: Aggressively clean the body tag during initial build ---
             clean_chatter_and_invalid_tags(body_tag)
             body_content = ''.join(str(c) for c in body_tag.contents)
         else:
             body_content = ''
-
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -137,6 +133,7 @@ async def create_edit_snippet(request: EditSnippetRequest):
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
+    # --- THIS IS THE FUNCTION WITH THE SYNTAX FIX ---
     try:
         full_html_doc = f"<body>{request.html}</body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
@@ -152,9 +149,19 @@ async def patch_html(request: PatchRequest):
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
             
-        parent_element.replace_with(new_snippet_soup)
+        parent_element.replace_with(*new_snippet_soup.contents)
 
         body_html = ''.join(str(c) for c in soup.body.contents)
         
-        # --- FIX #2: Return the original CSS and JS to prevent them from being lost ---
+        # Return the original CSS and JS to prevent them from being lost
         return {"html": body_html, "css": request.css, "js": request.js}
+    except Exception as e:
+        # The 'except' block that was missing has been restored.
+        print(f"Patching error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
+
+# Uvicorn runner
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
