@@ -70,9 +70,6 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
                         interactive=False
                     )
 
-    # --- THE BACKEND FIX IS HERE ---
-    # We are explicitly naming our API endpoint "build".
-    # Gradio will create it at the address /api/build/
     submit_button.click(
         fn=generate_website_code,
         inputs=[prompt_input],
@@ -84,4 +81,5 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
 # --- Launch the App ---
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 7860)) 
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    # THE FINAL FIX IS HERE: Explicitly enable the queue to force the API to work.
+    demo.launch(server_name="0.0.0.0", server_port=port, enable_queue=True)
