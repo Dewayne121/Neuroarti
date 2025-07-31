@@ -1,3 +1,3 @@
 gradio
-zhipuai
+openai
 gunicorn
