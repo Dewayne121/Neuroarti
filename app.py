@@ -38,33 +38,41 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE DEFINITIVE FIX: New Gatekeeper and Cleaning Functions ---
-def isolate_html_document(raw_text: str) -> str:
-    """
-    Finds the start of the DOCTYPE and throws away any preceding text (AI chatter).
-    This is the gatekeeper for full page builds.
-    """
-    # Find the start of the doctype, case-insensitive
-    doctype_start = raw_text.lower().find('<!doctype html')
-    if doctype_start != -1:
-        # If found, return everything from that point onwards
-        return raw_text[doctype_start:]
-    # If no doctype, the AI failed to produce a valid document.
-    print("Warning: DOCTYPE not found in AI response.")
-    return ""
 
+# --- THE DEFINITIVE FIX: Intelligent Chatter Removal ---
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    """Recursively removes known AI chatter tags and stray text nodes."""
-    if not hasattr(soup_or_tag, 'children'):
+    """
+    Intelligently removes AI chatter while preserving valid text content inside tags.
+    """
+    if not soup_or_tag or not hasattr(soup_or_tag, 'children'):
         return
-    nodes_to_remove = [child for child in list(soup_or_tag.children) 
-                       if (isinstance(child, NavigableString) and child.string.strip()) 
-                       or (hasattr(child, 'name') and child.name in ['think', 'thought', 'explanation'])]
+
+    nodes_to_remove = []
+    for child in list(soup_or_tag.children):
+        # Case 1: It's a text node (NavigableString).
+        if isinstance(child, NavigableString):
+            # We ONLY remove it if its parent is a known high-level tag (like body, div, section)
+            # AND it's not just whitespace. This preserves text inside <p>, <h1>, etc.
+            if soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main', 'article'] and child.string.strip():
+                nodes_to_remove.append(child)
+        # Case 2: It's an HTML tag.
+        elif hasattr(child, 'name'):
+            # If it's a known chatter tag, remove it.
+            if child.name in ['think', 'thought', 'explanation']:
+                nodes_to_remove.append(child)
+            # Otherwise, recurse into the tag to clean its children.
+            else:
+                clean_chatter_and_invalid_tags(child)
+
     for node in nodes_to_remove:
         node.decompose()
-    for child in soup_or_tag.children:
-        if hasattr(child, 'name'):
-            clean_chatter_and_invalid_tags(child)
+
+def isolate_html_document(raw_text: str) -> str:
+    doctype_start = raw_text.lower().find('<!doctype html')
+    if doctype_start != -1:
+        return raw_text[doctype_start:]
+    print("Warning: DOCTYPE not found in AI response.")
+    return ""
 
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
@@ -118,8 +126,6 @@ async def create_build(request: BuildRequest):
         "Place CSS in <style> tags and JS in <script> tags. RESPOND WITH ONLY HTML CODE."
     )
     raw_code = generate_code(system_prompt, request.prompt, model_id)
-    
-    # Apply the gatekeeper function to the raw AI output
     html_document = isolate_html_document(raw_code)
     
     if html_document:
