@@ -16,7 +16,6 @@ def generate_website_code(prompt: str):
         raise gr.Error("API Key is not configured. Please add your Together AI key as a variable in Railway.")
 
     try:
-        # --- THE BULLETPROOF SYSTEM PROMPT ---
         system_prompt = (
             "You are a world-class web developer who ONLY outputs raw HTML code. "
             "Your ONLY job is to convert a user's description into a single, complete, and valid HTML file using Tailwind CSS for styling. "
@@ -42,7 +41,7 @@ def generate_website_code(prompt: str):
         raise gr.Error(f"An API error occurred: {e}")
 
 
-# --- GRADIO UI (No changes here) ---
+# --- GRADIO UI ---
 with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
     gr.Markdown("# 🤖 AI Website Builder")
     gr.Markdown("Enter a description of the website you want to create, and the AI will build it on the right.")
@@ -71,10 +70,14 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
                         interactive=False
                     )
 
+    # --- THE BACKEND FIX IS HERE ---
+    # We are explicitly naming our API endpoint "build".
+    # Gradio will create it at the address /api/build/
     submit_button.click(
         fn=generate_website_code,
         inputs=[prompt_input],
-        outputs=[html_output, code_output]
+        outputs=[html_output, code_output],
+        api_name="build" 
     )
 
 
