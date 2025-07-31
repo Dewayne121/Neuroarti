@@ -15,6 +15,14 @@ class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
 
+class UpdateRequest(BaseModel):
+    html: str
+    css: str
+    js: str
+    prompt: str
+    model: str = "glm-4.5-air"
+    container_id: str
+
 class EditSnippetRequest(BaseModel):
     contextual_snippet: str
     prompt: str
@@ -41,17 +49,11 @@ MODEL_MAPPING = {
 
 # --- Helper Functions ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
-    """Prepends a container ID to every CSS rule to create a scoped stylesheet."""
     if not container_id: return css_content
-    
-    # This regex handles complex selectors, including comma-separated lists and media queries.
     def prefixer(match):
         selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
         return ", ".join(selectors) + match.group(2)
-        
-    # Process selectors outside of media queries
     css_content = re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, css_content)
-    # Process selectors inside of media queries
     css_content = re.sub(r'(@media[^{]*{\s*)(.*?)(\s*})', 
                          lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3), 
                          css_content, flags=re.DOTALL)
@@ -99,7 +101,7 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str):
         response = client.chat.completions.create(
             model=model_id,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.1, max_tokens=8000,
+            temperature=0.1, max_tokens=8192,
         )
         return response.choices[0].message.content or ""
     except Exception as e:
@@ -132,6 +134,47 @@ async def create_build(request: BuildRequest):
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
     
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
+
+# --- NEW ENDPOINT FOR GENERAL UPDATES ---
+@app.post("/update")
+async def update_build(request: UpdateRequest):
+    model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING.get("glm-4.5-air"))
+    system_prompt = (
+        "You are an expert web developer tasked with modifying an existing webpage. "
+        "You will receive the complete HTML, CSS, and JS of the current page, along with a user's request for a high-level change. "
+        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure and content as much as possible, only making the necessary changes. "
+        "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html> and including the modified <style> and <script> tags. "
+        "No explanations, no markdown. RESPOND WITH ONLY THE FULL HTML CODE."
+    )
+
+    # Reconstruct the full HTML document to send to the AI
+    full_html_for_ai = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>{request.css}</style>
+</head>
+<body>
+    <div id="{request.container_id}">
+        {request.html}
+    </div>
+</body>
+<script>{request.js}</script>
+</html>"""
+
+    user_prompt = f"USER REQUEST: '{request.prompt}'\n\nCURRENT WEBSITE CODE:\n{full_html_for_ai}"
+
+    raw_code = generate_code(system_prompt, user_prompt, model_id)
+    html_document = isolate_html_document(raw_code)
+
+    if html_document:
+        # Re-extract assets, which will also re-prefix the CSS correctly with the original container ID
+        body_html, css, js = extract_assets(html_document, request.container_id)
+        return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
+
+    raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
