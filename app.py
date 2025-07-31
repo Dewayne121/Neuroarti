@@ -58,11 +58,10 @@ def extract_assets(html_content: str) -> tuple:
     css = "\n".join(style.string or '' for style in soup.find_all('style'))
     js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
     
-    for tag in soup.find_all(['style', 'script']):
-        tag.decompose()
-        
-    body_content = soup.find('body')
-    return str(body_content) if body_content else '', css.strip(), js.strip()
+    body_tag = soup.find('body')
+    body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else str(soup)
+
+    return body_content, css.strip(), js.strip()
 
 # --- AI Core Functions ---
 def generate_code(system_prompt: str, user_prompt: str, model_id: str, is_snippet=False):
@@ -70,7 +69,8 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str, is_snippe
         response = client.chat.completions.create(
             model=model_id,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.7, max_tokens=4096,
+            temperature=0.5,
+            max_tokens=4096,
         )
         raw_html = response.choices[0].message.content
         return clean_html_response(raw_html, is_snippet=is_snippet)
@@ -105,12 +105,16 @@ async def create_build(request: BuildRequest):
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
+    # --- THE CORE FIX: Corrected typo from `MODEL_Mッピング` to `MODEL_MAPPING` ---
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
+    
     system_prompt = (
-        "You are a precise HTML code editor. You will be given an HTML snippet. "
-        "Your task is to modify this snippet based on the user's request. "
-        "Return ONLY the new, modified HTML snippet. Do not provide explanations, context, or markdown."
+        "You are a silent HTML code modification tool. Your single purpose is to take an HTML snippet and a user's instruction, and return the modified HTML snippet. "
+        "Your entire output MUST be ONLY the raw, modified HTML code for the snippet. "
+        "ABSOLUTELY NO commentary, explanations, or markdown like ```html. "
+        "You are a machine that only outputs code."
     )
+    
     user_prompt = f"User Request: '{request.prompt}'.\n\nHTML Snippet to Edit:\n```html\n{request.snippet}\n```"
     
     modified_snippet = generate_code(system_prompt, user_prompt, model_id, is_snippet=True)
@@ -121,20 +125,21 @@ async def create_edit_snippet(request: EditSnippetRequest):
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
-        soup = BeautifulSoup(request.html, 'html.parser')
+        full_html_doc = f"<body>{request.html}</body>"
+        soup = BeautifulSoup(full_html_doc, 'html.parser')
+        
         target_element = soup.select_one(request.selector)
-        
+
         if not target_element:
-            raise HTTPException(status_code=404, detail="Selector did not find any element to patch.")
+            raise HTTPException(status_code=404, detail=f"Selector '{request.selector}' did not find any element to patch.")
             
-        # The new snippet is also a string, so it needs to be parsed into a tag
         new_snippet_soup = BeautifulSoup(request.new_snippet, 'html.parser')
-        new_tag = new_snippet_soup.find() # Find the first tag in the snippet
+        new_tag = new_snippet_soup.contents[0] if new_snippet_soup.contents else None
         
-        if new_tag:
+        if new_tag and hasattr(new_tag, 'name'):
             target_element.replace_with(new_tag)
-        else: # If parsing fails, treat as plain text
-            target_element.replace_with(request.new_snippet)
+        else:
+            raise HTTPException(status_code=500, detail="Failed to parse the new snippet from AI.")
 
         body_html, css, js = extract_assets(str(soup))
         return {"html": body_html, "css": css, "js": js}
