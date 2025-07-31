@@ -1,9 +1,14 @@
 import gradio as gr
 import os
 from openai import OpenAI
-import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# --- Pydantic Model for API Request Body ---
+# This defines the expected JSON structure for our API call
+class PromptRequest(BaseModel):
+    prompt: str
 
 # --- Configuration ---
 API_KEY = os.environ.get("GLM_API_KEY") 
@@ -13,8 +18,9 @@ client = OpenAI(
     base_url="https://api.together.xyz/v1", 
 )
 
-# --- AI Core Function (No changes here) ---
-def generate_website_code(prompt: str):
+# --- AI Core Function ---
+def generate_website_code_sync(prompt: str):
+    # This is the synchronous version of the function for our API
     if not API_KEY:
         raise gr.Error("API Key is not configured.")
 
@@ -23,10 +29,10 @@ def generate_website_code(prompt: str):
             "You are a world-class web developer who ONLY outputs raw HTML code. "
             "Your ONLY job is to convert a user's description into a single, complete, and valid HTML file using Tailwind CSS for styling. "
             "CRITICAL REQUIREMENTS: "
-            "1. The output MUST be a full HTML document starting with `<!DOCTYPE html>` and enclosed in `<html>` tags."
-            "2. The `<head>` section MUST contain `<script src=\"https://cdn.tailwindcss.com\"></script>` to enable Tailwind CSS."
+            "1. The output MUST be a full HTML document starting with `<!DOCTYPE html>`."
+            "2. The `<head>` section MUST contain `<script src=\"https://cdn.tailwindcss.com\"></script>`."
             "3. The design must be modern, clean, and aesthetically pleasing."
-            "4. DO NOT include any explanations, comments, or markdown formatting like ```html. The output must be ONLY the raw HTML code itself."
+            "4. DO NOT include any explanations, comments, or markdown formatting like ` ```html `."
         )
 
         response = client.chat.completions.create(
@@ -37,40 +43,18 @@ def generate_website_code(prompt: str):
             ],
         )
         
-        html_code = response.choices[0].message.content
-        return html_code, html_code
+        return response.choices[0].message.content
 
     except Exception as e:
-        raise gr.Error(f"An API error occurred: {e}")
+        # For an API, we should return a proper error, not a Gradio error
+        print(f"API Error: {e}")
+        return None
 
 
-# --- Create Gradio UI (No changes here) ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
-    gr.Markdown("# 🤖 AI Website Builder")
-    # ... (the rest of your Gradio UI definition is the same)
-    with gr.Row():
-        with gr.Column(scale=1):
-            prompt_input = gr.Textbox(lines=10, placeholder="e.g., A sleek landing page...", label="Describe your website")
-            submit_button = gr.Button("Build Website", variant="primary")
-        with gr.Column(scale=3):
-            with gr.Tabs():
-                with gr.TabItem("Live Preview"):
-                    html_output = gr.HTML(label="Live Preview", value="<div>...</div>", show_label=False)
-                with gr.TabItem("Code"):
-                    code_output = gr.Code(label="Generated Code", language="html", interactive=False)
-    
-    submit_button.click(
-        fn=generate_website_code,
-        inputs=[prompt_input],
-        outputs=[html_output, code_output],
-        api_name="build" 
-    )
-
-# --- THE FINAL FIX: MOUNT GRADIO ON A FASTAPI APP ---
-# 1. Create a FastAPI app
+# --- FastAPI App Setup ---
 app = FastAPI()
 
-# 2. Add the CORS middleware to the FastAPI app
+# Add CORS middleware to allow all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -79,8 +63,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. Mount the Gradio app onto the FastAPI app
-app = gr.mount_gradio_app(app, demo, path="/")
+# --- Create the dedicated API endpoint ---
+@app.post("/build")
+async def create_build(request: PromptRequest):
+    """
+    This is our dedicated, robust API endpoint for building websites.
+    """
+    html_code = generate_website_code_sync(request.prompt)
+    if html_code:
+        return {"html": html_code}
+    else:
+        return {"error": "Failed to generate website code."}, 500
 
-# Note: The if __name__ == "__main__" block is no longer needed for Railway,
-# as the Procfile now directly uses uvicorn to run the `app` object.
+# Note: We are no longer mounting the Gradio UI. 
+# The backend is now a pure API server.
