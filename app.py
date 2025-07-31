@@ -15,12 +15,20 @@ class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
 
+# --- THE DEFINITIVE FIX: Added the missing UpdateRequest model ---
+class UpdateRequest(BaseModel):
+    html: str
+    css: str
+    js: str
+    prompt: str
+    model: str = "glm-4.5-air"
+    container_id: str
+
 class EditSnippetRequest(BaseModel):
     contextual_snippet: str
     prompt: str
     model: str = "glm-4.5-air"
 
-# --- FIX #1: The PatchRequest now needs the container_id ---
 class PatchRequest(BaseModel):
     html: str
     parent_selector: str
@@ -81,7 +89,6 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         body_tag = soup.find('body')
         if body_tag:
             clean_chatter_and_invalid_tags(body_tag)
-            # Check if our container exists and extract from it, otherwise from body
             container = body_tag.find('div', id=container_id)
             if container:
                 body_content = ''.join(str(c) for c in container.contents)
@@ -154,7 +161,6 @@ async def update_build(request: UpdateRequest):
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
-    # ... (this endpoint is unchanged)
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     system_prompt = (
         "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
@@ -175,28 +181,19 @@ async def create_edit_snippet(request: EditSnippetRequest):
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
-        # --- FIX #2: Reconstruct the full document with the container ID ---
-        # This ensures the selector has the correct context to search within.
         full_html_doc = f"<body><div id='{request.container_id}'>{request.html}</div></body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
-        
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
-            
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-            
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
-            
         parent_element.replace_with(*new_snippet_soup.contents)
-
-        # Now extract the content from *inside* the wrapper to send back
         container_div = soup.find('div', id=request.container_id)
         body_html = ''.join(str(c) for c in container_div.contents) if container_div else ''
-        
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
