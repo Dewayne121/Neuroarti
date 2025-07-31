@@ -1,6 +1,7 @@
 import gradio as gr
 import os
 from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- Configuration ---
 API_KEY = os.environ.get("GLM_API_KEY") 
@@ -50,7 +51,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
         with gr.Column(scale=1):
             prompt_input = gr.Textbox(
                 lines=10, 
-                placeholder="e.g., A sleek landing page for a SaaS company called 'SynthFlow'. It should have a dark theme, a hero section with a glowing button, a features grid, and a simple footer.", 
+                placeholder="e.g., A sleek landing page for a SaaS company called 'SynthFlow'.", 
                 label="Describe your website"
             )
             submit_button = gr.Button("Build Website", variant="primary")
@@ -77,9 +78,21 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
         api_name="build" 
     )
 
+# --- THE FINAL FIX: CORS CONFIGURATION ---
+# This tells the Gradio server to accept connections from any website.
+app_kwargs = {
+    "middleware": [
+        {
+            "middleware_class": CORSMiddleware,
+            "allow_origins": ["*"],
+            "allow_credentials": True,
+            "allow_methods": ["*"],
+            "allow_headers": ["*"],
+        }
+    ]
+}
 
 # --- Launch the App ---
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 7860)) 
-    # THE FINAL FIX IS HERE: Explicitly enable the queue to force the API to work.
-    demo.launch(server_name="0.0.0.0", server_port=port, enable_queue=True)
+    demo.launch(server_name="0.0.0.0", server_port=port, enable_queue=True, app_kwargs=app_kwargs)
