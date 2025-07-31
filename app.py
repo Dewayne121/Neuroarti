@@ -25,8 +25,8 @@ def generate_website_code(prompt: str):
         )
 
         response = client.chat.completions.create(
-            # Using the correct model name you found!
-            model="zai-org/GLM-4.5-Air", 
+            # Switched to a different model for testing
+            model="deepseek-ai/DeepSeek-V3", 
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
