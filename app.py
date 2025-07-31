@@ -1,13 +1,12 @@
 import gradio as gr
 import os
 from openai import OpenAI
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import re
-import json
-from typing import Dict, Any
+from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 
 # --- Pydantic Models ---
@@ -16,27 +15,22 @@ class BuildRequest(BaseModel):
     model: str = "glm-4.5-air"
 
 class EditSnippetRequest(BaseModel):
-    snippet: str
+    contextual_snippet: str
     prompt: str
     model: str = "glm-4.5-air"
 
 class PatchRequest(BaseModel):
     html: str
-    selector: str
-    new_snippet: str
+    parent_selector: str
+    new_parent_snippet: str
 
 # --- Configuration ---
-# --- FIX #1: Using the correct environment variable for Together.ai ---
-API_KEY = os.environ.get("TOGETHER_API_KEY") 
+API_KEY = os.environ.get("TOGETHER_API_KEY")
 if not API_KEY:
-    raise ValueError("API Key not found. Please set the TOGETHER_API_KEY environment variable in Railway.")
+    raise ValueError("API Key not found. Please set TOGETHER_API_KEY.")
 
-client = OpenAI(
-    api_key=API_KEY,
-    base_url="https://api.together.xyz/v1",
-)
+client = OpenAI(api_key=API_KEY, base_url="https://api.together.xyz/v1")
 
-# --- FIX #2: Using the correct and available model ID for DeepSeek on Together.ai ---
 MODEL_MAPPING = {
     "glm-4.5-air": "zai-org/GLM-4.5-Air-FP8",
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
@@ -45,20 +39,15 @@ MODEL_MAPPING = {
 # --- Helper Functions ---
 def clean_chatter(soup_tag):
     if not soup_tag: return
-    nodes_to_remove = []
-    for child in soup_tag.children:
-        if isinstance(child, NavigableString) and child.string.strip():
-            nodes_to_remove.append(child)
-        elif child.name in ['think', 'thought', 'explanation']:
-            nodes_to_remove.append(child)
-    for node in nodes_to_remove:
-        node.decompose()
+    nodes_to_remove = [child for child in soup_tag.children if isinstance(child, NavigableString) and child.string.strip()]
+    for node in nodes_to_remove: node.decompose()
 
 def clean_html_snippet(text: str) -> str:
-    soup = BeautifulSoup(f"<div>{text}</div>", 'html.parser')
-    wrapper = soup.find('div')
-    clean_chatter(wrapper)
-    return ''.join(str(c) for c in wrapper.contents)
+    # Use BeautifulSoup to parse and get only the tag content, which strips outer chatter
+    soup = BeautifulSoup(text, 'html.parser')
+    # Find the first actual tag
+    first_tag = soup.find(lambda tag: tag.name is not None)
+    return str(first_tag) if first_tag else ""
 
 def extract_assets(html_content: str) -> tuple:
     try:
@@ -112,20 +101,25 @@ async def create_build(request: BuildRequest):
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
+    # --- CONTEXT-AWARE SYSTEM PROMPT ---
     system_prompt = (
-        "You are an HTML transformation function. Input: HTML snippet + instruction. Output: Modified HTML snippet. "
-        "CRITICAL: Your response MUST be ONLY the modified HTML snippet. NO explanations, NO markdown, NO chatter. "
-        "If you cannot perform the modification, return the original snippet unchanged."
+        "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
+        "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
+        "You MUST preserve the surrounding parent and sibling elements. "
+        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARGET -->` comment removed. "
+        "NO explanations, NO markdown. Your entire response must be the updated HTML block."
     )
-    user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nHTML TO MODIFY:\n{request.snippet}"
+    user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
+    
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
     if cleaned_snippet:
         return {"snippet": cleaned_snippet}
     
-    print(f"Snippet generation or cleaning failed. Raw response: '{modified_snippet_raw}'. Returning original.")
-    return {"snippet": request.snippet}
+    print(f"Snippet generation or cleaning failed. Raw: '{modified_snippet_raw}'. Returning original context.")
+    # Return original snippet minus the comment
+    return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
@@ -133,28 +127,29 @@ async def patch_html(request: PatchRequest):
         full_html_doc = f"<body>{request.html}</body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
         
-        target_element = soup.select_one(request.selector)
-        if not target_element:
-            raise HTTPException(status_code=404, detail=f"Selector '{request.selector}' not found.")
+        # --- PATCH LOGIC NOW TARGETS THE PARENT ---
+        parent_element = soup.select_one(request.parent_selector)
+        if not parent_element:
+            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
             
-        if not request.new_snippet or not request.new_snippet.strip():
-            raise HTTPException(status_code=400, detail="New snippet is empty.")
+        if not request.new_parent_snippet or not request.new_parent_snippet.strip():
+            raise HTTPException(status_code=400, detail="New parent snippet is empty.")
             
-        new_snippet_soup = BeautifulSoup(request.new_snippet, 'html.parser')
+        new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
         if not new_snippet_soup.contents:
-            raise HTTPException(status_code=500, detail="Failed to parse new snippet.")
+            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
             
-        target_element.replace_with(*new_snippet_soup.contents)
+        # Replace the original parent element with the new, modified parent element
+        parent_element.replace_with(new_snippet_soup)
 
         body_html = ''.join(str(c) for c in soup.body.contents)
         
-        # We don't return CSS/JS on patch as they are not modified.
         return {"html": body_html, "css": "", "js": ""}
     except Exception as e:
         print(f"Patching error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
-# Uvicorn runner for Railway
+# Uvicorn runner
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
