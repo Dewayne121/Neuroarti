@@ -1,5 +1,6 @@
 import gradio as gr
 import os
+import uuid
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,51 +39,48 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
+# --- Helper Functions ---
+def prefix_css_rules(css_content: str, container_id: str) -> str:
+    """Prepends a container ID to every CSS rule to create a scoped stylesheet."""
+    if not container_id: return css_content
+    
+    # This regex handles complex selectors, including comma-separated lists and media queries.
+    def prefixer(match):
+        selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
+        return ", ".join(selectors) + match.group(2)
+        
+    # Process selectors outside of media queries
+    css_content = re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, css_content)
+    # Process selectors inside of media queries
+    css_content = re.sub(r'(@media[^{]*{\s*)(.*?)(\s*})', 
+                         lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3), 
+                         css_content, flags=re.DOTALL)
+    return css_content
 
-# --- THE DEFINITIVE FIX: Intelligent Chatter Removal ---
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    """
-    Intelligently removes AI chatter while preserving valid text content inside tags.
-    """
-    if not soup_or_tag or not hasattr(soup_or_tag, 'children'):
-        return
-
-    nodes_to_remove = []
-    for child in list(soup_or_tag.children):
-        # Case 1: It's a text node (NavigableString).
-        if isinstance(child, NavigableString):
-            # We ONLY remove it if its parent is a known high-level tag (like body, div, section)
-            # AND it's not just whitespace. This preserves text inside <p>, <h1>, etc.
-            if soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main', 'article'] and child.string.strip():
-                nodes_to_remove.append(child)
-        # Case 2: It's an HTML tag.
-        elif hasattr(child, 'name'):
-            # If it's a known chatter tag, remove it.
-            if child.name in ['think', 'thought', 'explanation']:
-                nodes_to_remove.append(child)
-            # Otherwise, recurse into the tag to clean its children.
-            else:
-                clean_chatter_and_invalid_tags(child)
-
-    for node in nodes_to_remove:
-        node.decompose()
+    if not hasattr(soup_or_tag, 'children'): return
+    nodes_to_remove = [child for child in list(soup_or_tag.children) 
+                       if (isinstance(child, NavigableString) and child.string.strip() and soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main']) 
+                       or (hasattr(child, 'name') and child.name in ['think', 'thought', 'explanation'])]
+    for node in nodes_to_remove: node.decompose()
+    for child in soup_or_tag.children:
+        if hasattr(child, 'name'):
+            clean_chatter_and_invalid_tags(child)
 
 def isolate_html_document(raw_text: str) -> str:
     doctype_start = raw_text.lower().find('<!doctype html')
-    if doctype_start != -1:
-        return raw_text[doctype_start:]
-    print("Warning: DOCTYPE not found in AI response.")
-    return ""
+    return raw_text[doctype_start:] if doctype_start != -1 else ""
 
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
     return str(soup)
 
-def extract_assets(html_content: str) -> tuple:
+def extract_assets(html_content: str, container_id: str) -> tuple:
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
-        css = "\n".join(style.string or '' for style in soup.find_all('style'))
+        css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
+        prefixed_css = prefix_css_rules(css_content, container_id)
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
         body_tag = soup.find('body')
         if body_tag:
@@ -90,7 +88,7 @@ def extract_assets(html_content: str) -> tuple:
             body_content = ''.join(str(c) for c in body_tag.contents)
         else:
             body_content = ''
-        return body_content, css.strip(), js.strip()
+        return body_content, prefixed_css, js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
@@ -129,8 +127,9 @@ async def create_build(request: BuildRequest):
     html_document = isolate_html_document(raw_code)
     
     if html_document:
-        body_html, css, js = extract_assets(html_document)
-        return {"html": body_html, "css": css, "js": js}
+        container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
+        body_html, css, js = extract_assets(html_document, container_id)
+        return {"html": body_html, "css": css, "js": js, "container_id": container_id}
     
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
@@ -145,14 +144,12 @@ async def create_edit_snippet(request: EditSnippetRequest):
         "NO explanations, NO markdown. Your entire response must be the updated HTML block."
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
-    
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
     if cleaned_snippet and '<' in cleaned_snippet:
         return {"snippet": cleaned_snippet}
     
-    print(f"Snippet generation or cleaning failed. Raw response: '{modified_snippet_raw}'. Returning original context.")
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
 @app.post("/patch-html")
@@ -160,22 +157,16 @@ async def patch_html(request: PatchRequest):
     try:
         full_html_doc = f"<body>{request.html}</body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
-        
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
-            
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-            
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
-            
         parent_element.replace_with(*new_snippet_soup.contents)
-
         body_html = ''.join(str(c) for c in soup.body.contents)
-        
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
