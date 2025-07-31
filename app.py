@@ -40,7 +40,14 @@ MODEL_MAPPING = {
 
 # --- Helper Functions ---
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    if not soup_or_tag: return
+    """
+    Recursively removes known AI chatter tags and stray text nodes from a BeautifulSoup object.
+    """
+    # --- THE CRITICAL FIX: Add a safety check (guard clause) ---
+    # If the item is not a tag and has no children (i.e., it's a text node), stop recursion.
+    if not hasattr(soup_or_tag, 'children'):
+        return
+
     nodes_to_remove = []
     for child in list(soup_or_tag.children):
         if isinstance(child, NavigableString) and child.string.strip():
@@ -49,7 +56,9 @@ def clean_chatter_and_invalid_tags(soup_or_tag):
             if child.name in ['think', 'thought', 'explanation']:
                 nodes_to_remove.append(child)
             else:
+                # Recurse into valid children tags
                 clean_chatter_and_invalid_tags(child)
+
     for node in nodes_to_remove:
         node.decompose()
 
@@ -63,12 +72,14 @@ def extract_assets(html_content: str) -> tuple:
         soup = BeautifulSoup(html_content, 'html.parser')
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
+        
         body_tag = soup.find('body')
         if body_tag:
             clean_chatter_and_invalid_tags(body_tag)
             body_content = ''.join(str(c) for c in body_tag.contents)
         else:
             body_content = ''
+
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -133,7 +144,6 @@ async def create_edit_snippet(request: EditSnippetRequest):
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
-    # --- THIS IS THE FUNCTION WITH THE SYNTAX FIX ---
     try:
         full_html_doc = f"<body>{request.html}</body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
@@ -153,10 +163,8 @@ async def patch_html(request: PatchRequest):
 
         body_html = ''.join(str(c) for c in soup.body.contents)
         
-        # Return the original CSS and JS to prevent them from being lost
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
-        # The 'except' block that was missing has been restored.
         print(f"Patching error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
