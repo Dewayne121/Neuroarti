@@ -1,2 +1,4 @@
 gradio
 openai
+fastapi
+uvicorn
