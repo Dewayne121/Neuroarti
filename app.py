@@ -16,16 +16,15 @@ def generate_website_code(prompt: str):
         raise gr.Error("API Key is not configured. Please add your Together AI key as a variable in Railway.")
 
     try:
-        # The new, much better system prompt!
+        # --- THE BULLETPROOF SYSTEM PROMPT ---
         system_prompt = (
-            "You are an elite web developer who specializes in creating beautiful, modern, and responsive websites using Tailwind CSS. Your designs are clean, professional, and aesthetically pleasing. "
-            "Your task is to generate a single, complete HTML file based on the user's request. "
-            "The HTML file MUST include: "
-            "1. A complete HTML structure (`<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`)."
-            "2. A `<head>` section that links to the official Tailwind CSS CDN: `<script src=\"https://cdn.tailwindcss.com\"></script>`."
-            "3. Use modern design principles: good use of whitespace, professional color palettes (e.g., neutral colors with a single accent color), and excellent typography (e.g., `sans-serif` fonts)."
-            "4. Make elements visually appealing. Use subtle shadows (`shadow-lg`), rounded corners (`rounded-xl`), and smooth transitions where appropriate."
-            "5. The output MUST be only the raw HTML code. Do not include any explanations, comments, or markdown formatting like ```html. Just the code."
+            "You are a world-class web developer who ONLY outputs raw HTML code. "
+            "Your ONLY job is to convert a user's description into a single, complete, and valid HTML file using Tailwind CSS for styling. "
+            "CRITICAL REQUIREMENTS: "
+            "1. The output MUST be a full HTML document starting with `<!DOCTYPE html>` and enclosed in `<html>` tags."
+            "2. The `<head>` section MUST contain `<script src=\"https://cdn.tailwindcss.com\"></script>` to enable Tailwind CSS."
+            "3. The design must be modern, clean, and aesthetically pleasing, with good use of colors and spacing."
+            "4. DO NOT include any explanations, comments, or markdown formatting like ```html. The output must be ONLY the raw HTML code itself, starting with `<!DOCTYPE html>`."
         )
 
         response = client.chat.completions.create(
@@ -37,20 +36,18 @@ def generate_website_code(prompt: str):
         )
         
         html_code = response.choices[0].message.content
-        # The function now returns the same code twice to update both UI components
         return html_code, html_code
 
     except Exception as e:
         raise gr.Error(f"An API error occurred: {e}")
 
 
-# --- NEW GRADIO UI ---
+# --- GRADIO UI (No changes here) ---
 with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
     gr.Markdown("# 🤖 AI Website Builder")
     gr.Markdown("Enter a description of the website you want to create, and the AI will build it on the right.")
 
     with gr.Row():
-        # --- Left Column for Inputs ---
         with gr.Column(scale=1):
             prompt_input = gr.Textbox(
                 lines=10, 
@@ -59,26 +56,21 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
             )
             submit_button = gr.Button("Build Website", variant="primary")
 
-        # --- Right Column for Outputs (with Tabs) ---
         with gr.Column(scale=3):
             with gr.Tabs():
-                # Tab 1: Live Preview
                 with gr.TabItem("Live Preview"):
                     html_output = gr.HTML(
                         label="Live Preview",
                         value="<div style='display:flex; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #aaa;'>Your website will appear here.</div>",
                         show_label=False
                     )
-                # Tab 2: Code Viewer
                 with gr.TabItem("Code"):
                     code_output = gr.Code(
                         label="Generated Code",
                         language="html",
-                        interactive=False # User cannot edit this directly
+                        interactive=False
                     )
 
-    # --- Event Handling ---
-    # The button click now updates TWO outputs: html_output and code_output
     submit_button.click(
         fn=generate_website_code,
         inputs=[prompt_input],
