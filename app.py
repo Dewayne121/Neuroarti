@@ -35,7 +35,6 @@ client = OpenAI(
     base_url="https://api.together.xyz/v1",
 )
 
-# --- FIX #1: Updated DeepSeek model to a valid and available one ---
 MODEL_MAPPING = {
     "glm-4.5-air": "zai-org/GLM-4.5-Air-FP8",
     "deepseek-r1": "deepseek-ai/deepseek-coder-33b-instruct" 
@@ -45,18 +44,30 @@ MODEL_MAPPING = {
 def clean_html_response(raw_response: str, is_snippet=False) -> str:
     cleaned = raw_response.strip()
     
+    # --- FIX #1: AGGRESSIVE PARSER TO REMOVE AI CHATTER ---
     if is_snippet:
-        # Aggressively find the first HTML tag and the last one to remove any chatter.
+        # First, try to find a markdown code block, which is the most common format for chatter.
+        code_block_match = re.search(r'```html\n(.*?)```', cleaned, re.DOTALL)
+        if code_block_match:
+            # If found, return ONLY the content inside.
+            return code_block_match.group(1).strip()
+
+        # If no markdown block, it might be raw code with chatter before/after.
+        # Find the first opening tag and the last closing tag.
         first_tag_match = re.search(r'<', cleaned)
-        last_tag_match = re.search(r'>', cleaned[::-1]) # Search reversed string
+        last_tag_match = re.search(r'>', cleaned[::-1]) # Search on a reversed string
         
         if first_tag_match and last_tag_match:
             start_index = first_tag_match.start()
+            # Calculate the end index from the reversed string match
             end_index = len(cleaned) - last_tag_match.start()
+            # This slices the string from the first '<' to the last '>'
             return cleaned[start_index:end_index].strip()
-        # Fallback to simple cleaning if regex fails
-        return re.sub(r'```html\n?|```', '', cleaned, flags=re.IGNORECASE).strip()
+        
+        # If all else fails (e.g., response is just text), return an empty string to avoid breaking the UI.
+        return ""
 
+    # For full HTML documents, the old logic is fine.
     doctype_match = re.search(r'<!DOCTYPE html.*?>', cleaned, re.IGNORECASE | re.DOTALL)
     if doctype_match:
         return cleaned[doctype_match.start():].strip()
@@ -78,7 +89,7 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str, is_snippe
         response = client.chat.completions.create(
             model=model_id,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.2, # Lowered temperature for less "creative" chatter
+            temperature=0.1, # Further lowered temperature for maximum predictability
             max_tokens=4096,
         )
         raw_html = response.choices[0].message.content
@@ -116,13 +127,13 @@ async def create_build(request: BuildRequest):
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     
-    # --- FIX #2: Extremely strict system prompt to prevent AI chatter ---
+    # --- FIX #2: BRUTALLY STRICT SYSTEM PROMPT ---
     system_prompt = (
-        "You are a machine. Your only function is to modify HTML code based on instructions. "
-        "You will receive an HTML snippet and an instruction. You MUST return ONLY the modified HTML snippet. "
-        "DO NOT include any text, explanations, or markdown formatting like ```html. "
-        "Your response must be valid HTML code and nothing else. "
-        "Example: If the user wants to make text red, and the snippet is `<div>Hello</div>`, your ONLY output should be `<div class=\"text-red-500\">Hello</div>`."
+        "You are a silent code transformation tool. You will receive an HTML snippet and an instruction. "
+        "Your response MUST be ONLY the modified HTML snippet. "
+        "DO NOT add any text, explanations, or markdown formatting like ```html. "
+        "Your entire response MUST BE valid HTML code and nothing else. "
+        "This is not a conversation. You are a parser that outputs code."
     )
     
     user_prompt = f"Instruction: '{request.prompt}'.\n\nHTML Snippet:\n{request.snippet}"
@@ -130,7 +141,8 @@ async def create_edit_snippet(request: EditSnippetRequest):
     modified_snippet = generate_code(system_prompt, user_prompt, model_id, is_snippet=True)
     if modified_snippet:
         return {"snippet": modified_snippet}
-    raise HTTPException(status_code=500, detail="Failed to edit snippet.")
+    # Provide a more specific error if the cleaning process results in an empty string
+    raise HTTPException(status_code=500, detail="AI response was unclear or contained no code. Please try again with a more specific prompt.")
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
@@ -144,9 +156,13 @@ async def patch_html(request: PatchRequest):
             raise HTTPException(status_code=404, detail=f"Selector '{request.selector}' did not find any element to patch.")
             
         new_snippet_soup = BeautifulSoup(request.new_snippet, 'html.parser')
-        new_tag = new_snippet_soup.contents[0] if new_snippet_soup.contents else None
+        # Check for contents to handle empty or invalid snippets from the AI
+        if not new_snippet_soup.contents:
+            raise HTTPException(status_code=500, detail="AI returned an empty or invalid HTML snippet.")
+            
+        new_tag = new_snippet_soup.contents[0]
         
-        if new_tag and hasattr(new_tag, 'name'):
+        if hasattr(new_tag, 'name'):
             target_element.replace_with(new_tag)
         else:
             raise HTTPException(status_code=500, detail="Failed to parse the new snippet from AI.")
