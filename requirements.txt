@@ -2,3 +2,5 @@ gradio
 openai
 fastapi
 uvicorn
+python-multipart
+pydantic
