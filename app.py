@@ -26,69 +26,48 @@ class PatchRequest(BaseModel):
     new_snippet: str
 
 # --- Configuration ---
-API_KEY = os.environ.get("GLM_API_KEY")
+# --- FIX #1: Using the correct environment variable for Together.ai ---
+API_KEY = os.environ.get("TOGETHER_API_KEY") 
 if not API_KEY:
-    raise ValueError("API Key not found. Please set the GLM_API_KEY environment variable.")
+    raise ValueError("API Key not found. Please set the TOGETHER_API_KEY environment variable in Railway.")
 
 client = OpenAI(
     api_key=API_KEY,
     base_url="https://api.together.xyz/v1",
 )
 
+# --- FIX #2: Using the correct and available model ID for DeepSeek on Together.ai ---
 MODEL_MAPPING = {
     "glm-4.5-air": "zai-org/GLM-4.5-Air-FP8",
-    "deepseek-r1": "deepseek-ai/deepseek-coder-33b-instruct" 
+    "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE DEFINITIVE FIX: Aggressive Post-Processing ---
+# --- Helper Functions ---
 def clean_chatter(soup_tag):
-    """
-    Recursively removes known AI chatter tags and stray text nodes from a BeautifulSoup object.
-    This is the core of the fix to guarantee clean output.
-    """
-    if not soup_tag:
-        return
-
+    if not soup_tag: return
     nodes_to_remove = []
-    # Find all direct children to iterate over
     for child in soup_tag.children:
-        # Case 1: It's a plain text node (NavigableString)
-        if isinstance(child, NavigableString):
-            # If the text is just whitespace, ignore it. Otherwise, it's chatter.
-            if child.string.strip():
-                nodes_to_remove.append(child)
-        # Case 2: It's a known chatter tag
+        if isinstance(child, NavigableString) and child.string.strip():
+            nodes_to_remove.append(child)
         elif child.name in ['think', 'thought', 'explanation']:
             nodes_to_remove.append(child)
-    
-    # Decompose (remove) all identified chatter nodes
     for node in nodes_to_remove:
         node.decompose()
 
 def clean_html_snippet(text: str) -> str:
-    """Cleans snippets by parsing them and removing chatter."""
     soup = BeautifulSoup(f"<div>{text}</div>", 'html.parser')
     wrapper = soup.find('div')
     clean_chatter(wrapper)
-    # Return the inner HTML of the cleaned wrapper
     return ''.join(str(c) for c in wrapper.contents)
 
 def extract_assets(html_content: str) -> tuple:
-    """Extracts CSS, JS, and a CLEANED body content from HTML"""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # Extract assets before cleaning
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
-        
         body_tag = soup.find('body')
-        
-        # *** APPLY THE CLEANING FUNCTION HERE ***
         clean_chatter(body_tag)
-        
         body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else ''
-
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -140,8 +119,6 @@ async def create_edit_snippet(request: EditSnippetRequest):
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nHTML TO MODIFY:\n{request.snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
-    
-    # Clean the raw response to remove any chatter
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
     if cleaned_snippet:
@@ -167,15 +144,11 @@ async def patch_html(request: PatchRequest):
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new snippet.")
             
-        # Replace with all contents of the new snippet to handle multiple root elements
         target_element.replace_with(*new_snippet_soup.contents)
 
-        # We don't need to re-clean here because the `currentHtml` was already clean
-        # and the new snippet was cleaned in the previous step.
         body_html = ''.join(str(c) for c in soup.body.contents)
         
-        # We assume CSS/JS don't change during a patch, so we just return the new body
-        # This is a safe assumption for our current workflow.
+        # We don't return CSS/JS on patch as they are not modified.
         return {"html": body_html, "css": "", "js": ""}
     except Exception as e:
         print(f"Patching error: {e}")
