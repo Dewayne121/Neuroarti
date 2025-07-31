@@ -36,27 +36,57 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Helper Functions ---
-def clean_chatter(soup_tag):
-    if not soup_tag: return
-    nodes_to_remove = [child for child in soup_tag.children if isinstance(child, NavigableString) and child.string.strip()]
-    for node in nodes_to_remove: node.decompose()
+# --- THE DEFINITIVE FIX: Enhanced Chatter Removal ---
+def clean_chatter_and_invalid_tags(soup_or_tag):
+    """
+    Recursively removes known AI chatter tags (like <think>) and stray text nodes 
+    that are not just whitespace. This is the definitive cleaning function.
+    """
+    if not soup_or_tag:
+        return
+
+    # A list to hold all nodes we want to remove
+    nodes_to_remove = []
+    
+    # We must iterate over a static list of children, not a live one.
+    for child in list(soup_or_tag.children):
+        # Case 1: It's a text node (NavigableString). If it's not just whitespace, it's chatter.
+        if isinstance(child, NavigableString) and child.string.strip():
+            nodes_to_remove.append(child)
+        # Case 2: It's an HTML tag. Check its name.
+        elif hasattr(child, 'name'):
+            # If it's a known chatter tag, mark it for removal.
+            if child.name in ['think', 'thought', 'explanation']:
+                nodes_to_remove.append(child)
+            # Otherwise, recurse into the tag to clean its children.
+            else:
+                clean_chatter_and_invalid_tags(child)
+
+    # Now, remove all the chatter nodes we found at this level.
+    for node in nodes_to_remove:
+        node.decompose()
 
 def clean_html_snippet(text: str) -> str:
-    # Use BeautifulSoup to parse and get only the tag content, which strips outer chatter
+    """Cleans snippets by parsing them and aggressively removing chatter."""
+    # The AI might return just the modified tag, or the parent.
+    # Parsing it directly will handle both cases.
     soup = BeautifulSoup(text, 'html.parser')
-    # Find the first actual tag
-    first_tag = soup.find(lambda tag: tag.name is not None)
-    return str(first_tag) if first_tag else ""
+    clean_chatter_and_invalid_tags(soup)
+    return str(soup)
 
 def extract_assets(html_content: str) -> tuple:
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
+        
         body_tag = soup.find('body')
-        clean_chatter(body_tag)
-        body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else ''
+        if body_tag:
+            clean_chatter_and_invalid_tags(body_tag)
+            body_content = ''.join(str(c) for c in body_tag.contents)
+        else:
+            body_content = ''
+
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -101,7 +131,6 @@ async def create_build(request: BuildRequest):
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
-    # --- CONTEXT-AWARE SYSTEM PROMPT ---
     system_prompt = (
         "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
         "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
@@ -114,11 +143,10 @@ async def create_edit_snippet(request: EditSnippetRequest):
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
-    if cleaned_snippet:
+    if cleaned_snippet and '<' in cleaned_snippet:
         return {"snippet": cleaned_snippet}
     
-    print(f"Snippet generation or cleaning failed. Raw: '{modified_snippet_raw}'. Returning original context.")
-    # Return original snippet minus the comment
+    print(f"Snippet generation or cleaning failed. Raw response: '{modified_snippet_raw}'. Returning original context.")
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
 @app.post("/patch-html")
@@ -127,7 +155,6 @@ async def patch_html(request: PatchRequest):
         full_html_doc = f"<body>{request.html}</body>"
         soup = BeautifulSoup(full_html_doc, 'html.parser')
         
-        # --- PATCH LOGIC NOW TARGETS THE PARENT ---
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
@@ -139,11 +166,11 @@ async def patch_html(request: PatchRequest):
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
             
-        # Replace the original parent element with the new, modified parent element
         parent_element.replace_with(new_snippet_soup)
 
         body_html = ''.join(str(c) for c in soup.body.contents)
         
+        # We don't return CSS/JS on patch as they are not expected to change.
         return {"html": body_html, "css": "", "js": ""}
     except Exception as e:
         print(f"Patching error: {e}")
