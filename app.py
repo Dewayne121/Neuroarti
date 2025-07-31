@@ -35,18 +35,27 @@ client = OpenAI(
     base_url="https://api.together.xyz/v1",
 )
 
+# --- FIX #1: Updated DeepSeek model to a valid and available one ---
 MODEL_MAPPING = {
     "glm-4.5-air": "zai-org/GLM-4.5-Air-FP8",
-    "deepseek-r1": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct" 
+    "deepseek-r1": "deepseek-ai/deepseek-coder-33b-instruct" 
 }
 
 # --- Helper Functions ---
 def clean_html_response(raw_response: str, is_snippet=False) -> str:
-    cleaned = re.sub(r'```html\n?', '', raw_response, flags=re.IGNORECASE)
-    cleaned = re.sub(r'```', '', cleaned)
+    cleaned = raw_response.strip()
     
     if is_snippet:
-        return cleaned.strip()
+        # Aggressively find the first HTML tag and the last one to remove any chatter.
+        first_tag_match = re.search(r'<', cleaned)
+        last_tag_match = re.search(r'>', cleaned[::-1]) # Search reversed string
+        
+        if first_tag_match and last_tag_match:
+            start_index = first_tag_match.start()
+            end_index = len(cleaned) - last_tag_match.start()
+            return cleaned[start_index:end_index].strip()
+        # Fallback to simple cleaning if regex fails
+        return re.sub(r'```html\n?|```', '', cleaned, flags=re.IGNORECASE).strip()
 
     doctype_match = re.search(r'<!DOCTYPE html.*?>', cleaned, re.IGNORECASE | re.DOTALL)
     if doctype_match:
@@ -69,7 +78,7 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str, is_snippe
         response = client.chat.completions.create(
             model=model_id,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.5,
+            temperature=0.2, # Lowered temperature for less "creative" chatter
             max_tokens=4096,
         )
         raw_html = response.choices[0].message.content
@@ -105,17 +114,18 @@ async def create_build(request: BuildRequest):
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
-    # --- THE CORE FIX: Corrected typo from `MODEL_Mッピング` to `MODEL_MAPPING` ---
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     
+    # --- FIX #2: Extremely strict system prompt to prevent AI chatter ---
     system_prompt = (
-        "You are a silent HTML code modification tool. Your single purpose is to take an HTML snippet and a user's instruction, and return the modified HTML snippet. "
-        "Your entire output MUST be ONLY the raw, modified HTML code for the snippet. "
-        "ABSOLUTELY NO commentary, explanations, or markdown like ```html. "
-        "You are a machine that only outputs code."
+        "You are a machine. Your only function is to modify HTML code based on instructions. "
+        "You will receive an HTML snippet and an instruction. You MUST return ONLY the modified HTML snippet. "
+        "DO NOT include any text, explanations, or markdown formatting like ```html. "
+        "Your response must be valid HTML code and nothing else. "
+        "Example: If the user wants to make text red, and the snippet is `<div>Hello</div>`, your ONLY output should be `<div class=\"text-red-500\">Hello</div>`."
     )
     
-    user_prompt = f"User Request: '{request.prompt}'.\n\nHTML Snippet to Edit:\n```html\n{request.snippet}\n```"
+    user_prompt = f"Instruction: '{request.prompt}'.\n\nHTML Snippet:\n{request.snippet}"
     
     modified_snippet = generate_code(system_prompt, user_prompt, model_id, is_snippet=True)
     if modified_snippet:
