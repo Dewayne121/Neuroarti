@@ -38,29 +38,33 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Helper Functions ---
+# --- THE DEFINITIVE FIX: New Gatekeeper and Cleaning Functions ---
+def isolate_html_document(raw_text: str) -> str:
+    """
+    Finds the start of the DOCTYPE and throws away any preceding text (AI chatter).
+    This is the gatekeeper for full page builds.
+    """
+    # Find the start of the doctype, case-insensitive
+    doctype_start = raw_text.lower().find('<!doctype html')
+    if doctype_start != -1:
+        # If found, return everything from that point onwards
+        return raw_text[doctype_start:]
+    # If no doctype, the AI failed to produce a valid document.
+    print("Warning: DOCTYPE not found in AI response.")
+    return ""
+
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    """
-    Recursively removes known AI chatter tags and stray text nodes from a BeautifulSoup object.
-    """
-    # --- THE CRITICAL FIX: Add a safety check (guard clause) ---
-    # If the item is not a tag and has no children (i.e., it's a text node), stop recursion.
+    """Recursively removes known AI chatter tags and stray text nodes."""
     if not hasattr(soup_or_tag, 'children'):
         return
-
-    nodes_to_remove = []
-    for child in list(soup_or_tag.children):
-        if isinstance(child, NavigableString) and child.string.strip():
-            nodes_to_remove.append(child)
-        elif hasattr(child, 'name'):
-            if child.name in ['think', 'thought', 'explanation']:
-                nodes_to_remove.append(child)
-            else:
-                # Recurse into valid children tags
-                clean_chatter_and_invalid_tags(child)
-
+    nodes_to_remove = [child for child in list(soup_or_tag.children) 
+                       if (isinstance(child, NavigableString) and child.string.strip()) 
+                       or (hasattr(child, 'name') and child.name in ['think', 'thought', 'explanation'])]
     for node in nodes_to_remove:
         node.decompose()
+    for child in soup_or_tag.children:
+        if hasattr(child, 'name'):
+            clean_chatter_and_invalid_tags(child)
 
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
@@ -72,14 +76,12 @@ def extract_assets(html_content: str) -> tuple:
         soup = BeautifulSoup(html_content, 'html.parser')
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
-        
         body_tag = soup.find('body')
         if body_tag:
             clean_chatter_and_invalid_tags(body_tag)
             body_content = ''.join(str(c) for c in body_tag.contents)
         else:
             body_content = ''
-
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -111,15 +113,20 @@ async def create_build(request: BuildRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     system_prompt = (
         "You are a silent code generation machine. Your response MUST be ONLY valid HTML code. "
-        "Start immediately with <!DOCTYPE html>. No explanations, no comments, no markdown. "
+        "Start your response immediately with <!DOCTYPE html>. No explanations, no comments, no markdown. "
         "Generate a complete single HTML file using Tailwind CSS via CDN. "
         "Place CSS in <style> tags and JS in <script> tags. RESPOND WITH ONLY HTML CODE."
     )
-    html_code = generate_code(system_prompt, request.prompt, model_id)
-    if html_code:
-        body_html, css, js = extract_assets(html_code)
+    raw_code = generate_code(system_prompt, request.prompt, model_id)
+    
+    # Apply the gatekeeper function to the raw AI output
+    html_document = isolate_html_document(raw_code)
+    
+    if html_document:
+        body_html, css, js = extract_assets(html_document)
         return {"html": body_html, "css": css, "js": js}
-    raise HTTPException(status_code=500, detail="Failed to generate valid website code.")
+    
+    raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
