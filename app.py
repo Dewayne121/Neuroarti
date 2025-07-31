@@ -3,19 +3,22 @@ import os
 from openai import OpenAI
 
 # --- Configuration ---
+# Make sure the value for this variable in Railway is your TOGETHER AI key.
 API_KEY = os.environ.get("GLM_API_KEY") 
 
+# This client is already correctly configured for Together AI's server.
 client = OpenAI(
     api_key=API_KEY,
-    base_url="https://api.siliconflow.cn/v1",
+    base_url="https://api.together.xyz/v1", 
 )
 
 # --- AI Core Function ---
 def generate_website_code(prompt: str):
     if not API_KEY:
-        raise gr.Error("API Key is not configured. Please add it as a variable in Railway.")
+        raise gr.Error("API Key is not configured. Please add your Together AI key as a variable in Railway.")
 
     try:
+        # The system prompt is still perfect.
         system_prompt = (
             "You are an expert web developer specializing in Tailwind CSS. "
             "Your task is to generate a single, complete HTML file based on the user's request. "
@@ -25,8 +28,8 @@ def generate_website_code(prompt: str):
         )
 
         response = client.chat.completions.create(
-            # Switched to a different model for testing
-            model="deepseek-ai/DeepSeek-V3", 
+            # Using the correct model name for Together AI!
+            model="zai-org/GLM-4.5-Air-FP8", # <<< THIS IS THE CRITICAL CHANGE
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
@@ -40,7 +43,7 @@ def generate_website_code(prompt: str):
         raise gr.Error(f"An API error occurred: {e}")
 
 
-# --- Gradio UI (No changes) ---
+# --- Gradio UI (No changes needed) ---
 with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
     gr.Markdown("# 🤖 AI Website Builder")
     gr.Markdown("Enter a description of the website you want to create, and the AI will build it on the right.")
@@ -65,7 +68,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
     )
 
 
-# --- Launch the App (No changes) ---
+# --- Launch the App (No changes needed) ---
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 7860)) 
     demo.launch(server_name="0.0.0.0", server_port=port)
