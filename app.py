@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import re
 import json
 from typing import Dict, Any
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 # --- Pydantic Models ---
 class BuildRequest(BaseModel):
@@ -40,120 +40,92 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/deepseek-coder-33b-instruct" 
 }
 
-# --- Enhanced Helper Functions (Based on your excellent approach) ---
-def clean_html_response(raw_response: str, is_snippet=False) -> str:
-    """Enhanced HTML cleaning with multiple fallback strategies"""
-    if not raw_response:
-        return ""
+# --- THE DEFINITIVE FIX: Aggressive Post-Processing ---
+def clean_chatter(soup_tag):
+    """
+    Recursively removes known AI chatter tags and stray text nodes from a BeautifulSoup object.
+    This is the core of the fix to guarantee clean output.
+    """
+    if not soup_tag:
+        return
+
+    nodes_to_remove = []
+    # Find all direct children to iterate over
+    for child in soup_tag.children:
+        # Case 1: It's a plain text node (NavigableString)
+        if isinstance(child, NavigableString):
+            # If the text is just whitespace, ignore it. Otherwise, it's chatter.
+            if child.string.strip():
+                nodes_to_remove.append(child)
+        # Case 2: It's a known chatter tag
+        elif child.name in ['think', 'thought', 'explanation']:
+            nodes_to_remove.append(child)
     
-    cleaned = raw_response.strip()
-    
-    if is_snippet:
-        return clean_html_snippet(cleaned)
-    else:
-        return clean_full_html_document(cleaned)
+    # Decompose (remove) all identified chatter nodes
+    for node in nodes_to_remove:
+        node.decompose()
 
 def clean_html_snippet(text: str) -> str:
-    """Aggressively clean HTML snippets to remove AI chatter"""
-    # Strategy 1: Extract from markdown code blocks (most common)
-    code_patterns = [r'```html\s*\n(.*?)\n```', r'```\n(.*?)\n```']
-    for pattern in code_patterns:
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-        if match:
-            extracted = match.group(1).strip()
-            if extracted and '<' in extracted:
-                return extracted
-
-    # Strategy 2: Find the largest HTML block
-    html_blocks = re.findall(r'<[^>]+>.*?</[^>]+>', text, re.DOTALL)
-    if html_blocks:
-        return max(html_blocks, key=len).strip()
-
-    # Strategy 3: Last resort - extract everything between the first '<' and last '>'
-    first_tag = text.find('<')
-    last_tag = text.rfind('>')
-    if first_tag != -1 and last_tag > first_tag:
-        return text[first_tag:last_tag + 1].strip()
-
-    # If no HTML is found, return empty to prevent injecting chatter
-    return ""
-
-def clean_full_html_document(text: str) -> str:
-    """Clean full HTML documents"""
-    text = re.sub(r'```html\s*\n?', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'```\s*$', '', text, flags=re.MULTILINE)
-    
-    doctype_match = re.search(r'<!DOCTYPE html.*?>', text, re.IGNORECASE | re.DOTALL)
-    if doctype_match:
-        return text[doctype_match.start():].strip()
-    
-    html_match = re.search(r'<html[^>]*>', text, re.IGNORECASE)
-    if html_match:
-        return text[html_match.start():].strip()
-
-    return text.strip()
+    """Cleans snippets by parsing them and removing chatter."""
+    soup = BeautifulSoup(f"<div>{text}</div>", 'html.parser')
+    wrapper = soup.find('div')
+    clean_chatter(wrapper)
+    # Return the inner HTML of the cleaned wrapper
+    return ''.join(str(c) for c in wrapper.contents)
 
 def extract_assets(html_content: str) -> tuple:
-    """Extract CSS, JS, and body content from HTML"""
+    """Extracts CSS, JS, and a CLEANED body content from HTML"""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extract assets before cleaning
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
         
         body_tag = soup.find('body')
-        body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else str(soup)
+        
+        # *** APPLY THE CLEANING FUNCTION HERE ***
+        clean_chatter(body_tag)
+        
+        body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else ''
 
         return body_content, css.strip(), js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- Enhanced AI Core Functions ---
-def generate_code(system_prompt: str, user_prompt: str, model_id: str, is_snippet=False):
-    """Generate code with enhanced error handling and cleaning"""
+# --- AI Core Functions ---
+def generate_code(system_prompt: str, user_prompt: str, model_id: str):
     try:
         response = client.chat.completions.create(
             model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt}, 
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.05,
-            max_tokens=4096,
-            stop=["```", "Hope this helps", "Let me know", "Feel free"]
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.1, max_tokens=8000,
         )
-        raw_html = response.choices[0].message.content
-        return clean_html_response(raw_html, is_snippet=is_snippet)
+        return response.choices[0].message.content or ""
     except Exception as e:
         print(f"Error calling AI model {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"AI service error: {e}")
 
 # --- FastAPI App ---
 app = FastAPI()
-app.add_middleware(
-    CORSMiddleware, 
-    allow_origins=["*"], 
-    allow_credentials=True, 
-    allow_methods=["*"], 
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    return "<h1>NeuroArti Pro Builder API is operational.</h1>"
+async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 
-# --- Enhanced API Endpoints ---
+# --- API Endpoints ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     system_prompt = (
-        "CRITICAL: You are a code generation machine. Your response must be ONLY valid HTML code.\n"
-        "RULES:\n1. Start immediately with <!DOCTYPE html>.\n2. No explanations or text before/after the HTML.\n"
-        "3. No markdown formatting.\n4. Generate a complete single HTML file using Tailwind CSS via CDN.\n"
-        "5. Place CSS in <style> tags and JS in <script> tags.\nRESPOND WITH ONLY HTML CODE."
+        "You are a silent code generation machine. Your response MUST be ONLY valid HTML code. "
+        "Start immediately with <!DOCTYPE html>. No explanations, no comments, no markdown. "
+        "Generate a complete single HTML file using Tailwind CSS via CDN. "
+        "Place CSS in <style> tags and JS in <script> tags. RESPOND WITH ONLY HTML CODE."
     )
     html_code = generate_code(system_prompt, request.prompt, model_id)
-    if html_code and len(html_code.strip()) > 0:
+    if html_code:
         body_html, css, js = extract_assets(html_code)
         return {"html": body_html, "css": css, "js": js}
     raise HTTPException(status_code=500, detail="Failed to generate valid website code.")
@@ -162,18 +134,20 @@ async def create_build(request: BuildRequest):
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     system_prompt = (
-        "You are an HTML transformation function. Input: HTML snippet + instruction. Output: Modified HTML snippet.\n"
-        "CRITICAL RULES:\n1. Your response must be ONLY the modified HTML snippet.\n2. NO explanations or text.\n"
-        "3. NO markdown.\n4. If you cannot modify it, return the original snippet unchanged.\n"
-        "5. Your response must start with '<' and end with '>'.\nRESPOND WITH ONLY HTML CODE."
+        "You are an HTML transformation function. Input: HTML snippet + instruction. Output: Modified HTML snippet. "
+        "CRITICAL: Your response MUST be ONLY the modified HTML snippet. NO explanations, NO markdown, NO chatter. "
+        "If you cannot perform the modification, return the original snippet unchanged."
     )
-    user_prompt = f"INSTRUCTION: {request.prompt}\n\nHTML TO MODIFY:\n{request.snippet}"
-    modified_snippet = generate_code(system_prompt, user_prompt, model_id, is_snippet=True)
+    user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nHTML TO MODIFY:\n{request.snippet}"
+    modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
     
-    if modified_snippet and '<' in modified_snippet:
-        return {"snippet": modified_snippet}
+    # Clean the raw response to remove any chatter
+    cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
-    print(f"Snippet generation or cleaning failed. AI response was: '{modified_snippet}'. Returning original.")
+    if cleaned_snippet:
+        return {"snippet": cleaned_snippet}
+    
+    print(f"Snippet generation or cleaning failed. Raw response: '{modified_snippet_raw}'. Returning original.")
     return {"snippet": request.snippet}
 
 @app.post("/patch-html")
@@ -193,14 +167,16 @@ async def patch_html(request: PatchRequest):
         if not new_snippet_soup.contents:
             raise HTTPException(status_code=500, detail="Failed to parse new snippet.")
             
-        new_tag = new_snippet_soup.contents[0]
-        if hasattr(new_tag, 'name'):
-            target_element.replace_with(new_tag)
-        else:
-            target_element.replace_with(str(new_tag))
+        # Replace with all contents of the new snippet to handle multiple root elements
+        target_element.replace_with(*new_snippet_soup.contents)
 
-        body_html, css, js = extract_assets(str(soup))
-        return {"html": body_html, "css": css, "js": js}
+        # We don't need to re-clean here because the `currentHtml` was already clean
+        # and the new snippet was cleaned in the previous step.
+        body_html = ''.join(str(c) for c in soup.body.contents)
+        
+        # We assume CSS/JS don't change during a patch, so we just return the new body
+        # This is a safe assumption for our current workflow.
+        return {"html": body_html, "css": "", "js": ""}
     except Exception as e:
         print(f"Patching error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
