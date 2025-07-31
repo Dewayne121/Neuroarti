@@ -34,6 +34,7 @@ class PatchRequest(BaseModel):
     new_parent_snippet: str
     css: str
     js: str
+    container_id: str # <<< KEY FIX 1: Add container_id to the model
 
 # --- Configuration ---
 API_KEY = os.environ.get("TOGETHER_API_KEY")
@@ -76,7 +77,11 @@ def isolate_html_document(raw_text: str) -> str:
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
+    # If AI wraps response in html/body, extract only body contents
+    if soup.body:
+        return ''.join(str(c) for c in soup.body.contents)
     return str(soup)
+
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     try:
@@ -87,7 +92,12 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         body_tag = soup.find('body')
         if body_tag:
             clean_chatter_and_invalid_tags(body_tag)
-            body_content = ''.join(str(c) for c in body_tag.contents)
+            # Check if the body's direct child is the container, and if so, extract its contents
+            container_in_body = body_tag.find(id=container_id)
+            if container_in_body and container_in_body.parent == body_tag:
+                 body_content = ''.join(str(c) for c in container_in_body.contents)
+            else:
+                 body_content = ''.join(str(c) for c in body_tag.contents)
         else:
             body_content = ''
         return body_content, prefixed_css, js.strip()
@@ -135,7 +145,6 @@ async def create_build(request: BuildRequest):
     
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
-# --- NEW ENDPOINT FOR GENERAL UPDATES ---
 @app.post("/update")
 async def update_build(request: UpdateRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING.get("glm-4.5-air"))
@@ -147,7 +156,6 @@ async def update_build(request: UpdateRequest):
         "No explanations, no markdown. RESPOND WITH ONLY THE FULL HTML CODE."
     )
 
-    # Reconstruct the full HTML document to send to the AI
     full_html_for_ai = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -170,7 +178,6 @@ async def update_build(request: UpdateRequest):
     html_document = isolate_html_document(raw_code)
 
     if html_document:
-        # Re-extract assets, which will also re-prefix the CSS correctly with the original container ID
         body_html, css, js = extract_assets(html_document, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
 
@@ -195,24 +202,47 @@ async def create_edit_snippet(request: EditSnippetRequest):
     
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
+# <<< KEY FIX 2: Update the entire /patch-html endpoint >>>
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
-        full_html_doc = f"<body>{request.html}</body>"
+        # Reconstruct the full document structure that the selector expects
+        full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
+
+        # Select the parent element within the reconstructed document
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
-            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
+            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found in reconstructed document.")
+
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
+
+        # Parse the new snippet from the AI
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
-        if not new_snippet_soup.contents:
-            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
-        parent_element.replace_with(*new_snippet_soup.contents)
-        body_html = ''.join(str(c) for c in soup.body.contents)
+        
+        # The AI might return a full HTML doc or just the snippet. Extract the relevant nodes.
+        new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
+        if not new_contents:
+            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet from AI response.")
+        
+        # Replace the old parent element with the new one(s)
+        parent_element.replace_with(*new_contents)
+
+        # Find the container again in the modified soup
+        container_div = soup.select_one(f'#{request.container_id}')
+        if not container_div:
+            # This would be an internal error if the container is lost
+            raise HTTPException(status_code=500, detail="Container element was lost after patching HTML.")
+
+        # Extract the inner HTML of the container to send back to the client
+        body_html = ''.join(str(c) for c in container_div.contents)
+        
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
 # Uvicorn runner
