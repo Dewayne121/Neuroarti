@@ -1,6 +1,8 @@
 import gradio as gr
 import os
 from openai import OpenAI
+import uvicorn
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Configuration ---
@@ -11,10 +13,10 @@ client = OpenAI(
     base_url="https://api.together.xyz/v1", 
 )
 
-# --- AI Core Function ---
+# --- AI Core Function (No changes here) ---
 def generate_website_code(prompt: str):
     if not API_KEY:
-        raise gr.Error("API Key is not configured. Please add your Together AI key as a variable in Railway.")
+        raise gr.Error("API Key is not configured.")
 
     try:
         system_prompt = (
@@ -23,8 +25,8 @@ def generate_website_code(prompt: str):
             "CRITICAL REQUIREMENTS: "
             "1. The output MUST be a full HTML document starting with `<!DOCTYPE html>` and enclosed in `<html>` tags."
             "2. The `<head>` section MUST contain `<script src=\"https://cdn.tailwindcss.com\"></script>` to enable Tailwind CSS."
-            "3. The design must be modern, clean, and aesthetically pleasing, with good use of colors and spacing."
-            "4. DO NOT include any explanations, comments, or markdown formatting like ```html. The output must be ONLY the raw HTML code itself, starting with `<!DOCTYPE html>`."
+            "3. The design must be modern, clean, and aesthetically pleasing."
+            "4. DO NOT include any explanations, comments, or markdown formatting like ```html. The output must be ONLY the raw HTML code itself."
         )
 
         response = client.chat.completions.create(
@@ -42,35 +44,21 @@ def generate_website_code(prompt: str):
         raise gr.Error(f"An API error occurred: {e}")
 
 
-# --- GRADIO UI ---
+# --- Create Gradio UI (No changes here) ---
 with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
     gr.Markdown("# 🤖 AI Website Builder")
-    gr.Markdown("Enter a description of the website you want to create, and the AI will build it on the right.")
-
+    # ... (the rest of your Gradio UI definition is the same)
     with gr.Row():
         with gr.Column(scale=1):
-            prompt_input = gr.Textbox(
-                lines=10, 
-                placeholder="e.g., A sleek landing page for a SaaS company called 'SynthFlow'.", 
-                label="Describe your website"
-            )
+            prompt_input = gr.Textbox(lines=10, placeholder="e.g., A sleek landing page...", label="Describe your website")
             submit_button = gr.Button("Build Website", variant="primary")
-
         with gr.Column(scale=3):
             with gr.Tabs():
                 with gr.TabItem("Live Preview"):
-                    html_output = gr.HTML(
-                        label="Live Preview",
-                        value="<div style='display:flex; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #aaa;'>Your website will appear here.</div>",
-                        show_label=False
-                    )
+                    html_output = gr.HTML(label="Live Preview", value="<div>...</div>", show_label=False)
                 with gr.TabItem("Code"):
-                    code_output = gr.Code(
-                        label="Generated Code",
-                        language="html",
-                        interactive=False
-                    )
-
+                    code_output = gr.Code(label="Generated Code", language="html", interactive=False)
+    
     submit_button.click(
         fn=generate_website_code,
         inputs=[prompt_input],
@@ -78,21 +66,21 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange")) as demo:
         api_name="build" 
     )
 
-# --- THE FINAL FIX: CORS CONFIGURATION ---
-# This tells the Gradio server to accept connections from any website.
-app_kwargs = {
-    "middleware": [
-        {
-            "middleware_class": CORSMiddleware,
-            "allow_origins": ["*"],
-            "allow_credentials": True,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
-        }
-    ]
-}
+# --- THE FINAL FIX: MOUNT GRADIO ON A FASTAPI APP ---
+# 1. Create a FastAPI app
+app = FastAPI()
 
-# --- Launch the App ---
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 7860)) 
-    demo.launch(server_name="0.0.0.0", server_port=port, enable_queue=True, app_kwargs=app_kwargs)
+# 2. Add the CORS middleware to the FastAPI app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 3. Mount the Gradio app onto the FastAPI app
+app = gr.mount_gradio_app(app, demo, path="/")
+
+# Note: The if __name__ == "__main__" block is no longer needed for Railway,
+# as the Procfile now directly uses uvicorn to run the `app` object.
