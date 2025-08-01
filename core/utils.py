@@ -20,7 +20,7 @@ def is_the_same_html(current_html: str) -> bool:
         soup = BeautifulSoup(html_str, 'html.parser')
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
-        return ' '.join(soup.get_text(strip=True).split())
+        return ' '.join(soup.get_text(strip=true).split())
     return normalize(DEFAULT_HTML) == normalize(current_html)
 
 def apply_diff_patch(original_html: str, ai_response: str) -> str:
@@ -67,8 +67,8 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Definitively extracts the first complete HTML element from a messy AI response.
-    This handles markdown, chatter, and duplication from various AI models.
+    Definitively extracts the first complete HTML element from an AI response
+    using a simple and robust parsing strategy.
     """
     if not raw_text:
         return ""
@@ -85,20 +85,17 @@ def extract_first_html_element(raw_text: str) -> str:
         if first_tag_match:
             text_to_parse = text_to_parse[first_tag_match.start():]
         else:
-            return "" # No HTML tags found at all.
+            return "" # No HTML tags found.
 
-    # Step 3: Use BeautifulSoup to parse the cleaned text and directly find the first element.
-    # This is the most reliable way to handle both simple (<h1>) and complex (<section>...) elements.
+    # Step 3: Use BeautifulSoup's find() method to directly get the first tag.
+    # This is the most reliable way to handle both simple (<h1>) and complex (<section>) elements
+    # and inherently prevents duplication.
     try:
         soup = BeautifulSoup(text_to_parse, 'html.parser')
+        first_element = soup.find(lambda tag: isinstance(tag, Tag))
         
-        # Iterate through the top-level children of the parsed document
-        for element in soup.contents:
-            if isinstance(element, Tag):
-                # Return the very first complete tag found. This prevents duplication.
-                return str(element)
-        
-        # If no top-level tags are found, return empty.
+        if first_element:
+            return str(first_element)
         return ""
     except Exception as e:
         print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
