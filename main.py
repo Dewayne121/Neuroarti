@@ -12,32 +12,33 @@ from core.ai_services import generate_code
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_REWRITE_ELEMENT # New, hyper-focused prompt
+    FOLLOW_UP_SYSTEM_PROMPT,
+    SEARCH_START  # FIXED: Added missing import
 )
 from core.models import MODELS
 from core.utils import (
     ip_limiter,
     is_the_same_html,
+    apply_diff_patch,
     isolate_and_clean_html,
     extract_assets
 )
 
 load_dotenv()
 
-# --- Pydantic Models ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str
     html: str | None = None
 
-class EditElementRequest(BaseModel):
+class UpdateRequest(BaseModel):
     prompt: str
     model: str
-    html: str
+    html: str # Full HTML document for context
     css: str
     js: str
     container_id: str
-    selector: str # The unique CSS selector for the element
+    selectedElementHtml: str | None = None
 
 app = FastAPI()
 
@@ -77,51 +78,66 @@ async def build_or_full_update(request: Request, body: BuildRequest):
         "ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id
     })
 
-# NEW, DEDICATED ENDPOINT FOR SURGICAL EDITS
-@app.put("/api/edit-element")
-async def edit_element(request: Request, body: EditElementRequest):
+@app.put("/api/ask-ai")
+async def diff_patch_update(request: Request, body: UpdateRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
 
-    if not all([body.html, body.selector, body.prompt, body.container_id]):
-        raise HTTPException(status_code=400, detail="Missing required fields for element edit.")
+    if not body.html:
+        raise HTTPException(status_code=400, detail="HTML content is required for a patch update.")
     
-    # Reconstruct the document to find the element
-    full_html_doc = f'<html><body><div id="{body.container_id}">{body.html}</div></body></html>'
-    soup = BeautifulSoup(full_html_doc, 'html.parser')
+    if body.model not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid model selected")
+
+    # FIXED: Enhanced user prompt construction with better element selection handling
+    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is: '{body.prompt}'"
     
-    target_element = soup.select_one(body.selector)
-    if not target_element:
-        raise HTTPException(status_code=404, detail=f"Element with selector '{body.selector}' not found.")
-    
-    original_element_html = str(target_element)
-    user_prompt = f"INSTRUCTION: '{body.prompt}'.\n\nCURRENT HTML ELEMENT:\n{original_element_html}"
+    # FIXED: Better handling of selected element
+    if body.selectedElementHtml and body.selectedElementHtml.strip():
+        user_prompt += f"\n\nIMPORTANT: I have selected a SPECIFIC ELEMENT to modify. Please confine your changes to ONLY this element and its children. Here is the selected element:\n```html\n{body.selectedElementHtml}\n```\n\nYou MUST find this exact element in the full HTML above and modify ONLY this element."
 
-    # Ask the AI to rewrite ONLY this element
-    new_element_html = await generate_code(SYSTEM_PROMPT_REWRITE_ELEMENT, user_prompt, body.model)
+    patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
 
-    if not new_element_html or not new_element_html.strip().startswith('<'):
-        raise HTTPException(status_code=500, detail="AI returned an invalid response for the element rewrite.")
+    soup = BeautifulSoup(body.html, 'html.parser')
+    original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
 
-    # Safely replace the old element with the new one
-    new_element_soup = BeautifulSoup(new_element_html, 'html.parser')
-    if new_element_soup.contents:
-        target_element.replace_with(new_element_soup.contents[0])
-    else:
-        raise HTTPException(status_code=500, detail="Could not parse the new element from AI.")
+    # FIXED: Better validation of patch instructions
+    if not patch_instructions or not patch_instructions.strip() or SEARCH_START not in patch_instructions:
+        print("Warning: AI returned an invalid patch. No changes applied.")
+        print(f"AI Response: {patch_instructions[:200]}...")  # Debug logging
+        return JSONResponse(content={
+            "ok": True, 
+            "html": original_body_content, 
+            "css": body.css, 
+            "js": body.js, 
+            "container_id": body.container_id
+        })
 
-    # Extract the full body content from the modified document
-    final_container_div = soup.select_one(f"#{body.container_id}")
-    updated_body_content = ''.join(str(c) for c in final_container_div.contents) if final_container_div else ""
-    
-    return JSONResponse(content={
-        "ok": True,
-        "html": updated_body_content,
-        "css": body.css,
-        "js": body.js,
-        "container_id": body.container_id
-    })
+    try:
+        updated_full_html = apply_diff_patch(body.html, patch_instructions)
+        
+        soup = BeautifulSoup(updated_full_html, 'html.parser')
+        updated_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else ""
+
+        return JSONResponse(content={
+            "ok": True,
+            "html": updated_body_content,
+            "css": body.css,
+            "js": body.js,
+            "container_id": body.container_id
+        })
+        
+    except Exception as e:
+        print(f"Error applying patch: {e}")
+        # Fallback to original content if patch fails
+        return JSONResponse(content={
+            "ok": True,
+            "html": original_body_content,
+            "css": body.css,
+            "js": body.js,
+            "container_id": body.container_id
+        })
 
 if __name__ == "__main__":
     import uvicorn
