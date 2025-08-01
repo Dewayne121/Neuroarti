@@ -9,8 +9,9 @@ import re
 from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
+import random
 
-# --- Pydantic Models (Kept from modern version) ---
+# --- Pydantic Models (from the more advanced version) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -36,7 +37,7 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration (Kept from modern version) ---
+# --- Configuration (from the more advanced version) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
@@ -54,17 +55,57 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE DEFINITIVE RULESET (Inspired by what worked in the old version) ---
+# --- IMPROVED IMAGE SERVICE STRATEGY ---
+def get_reliable_image_url(width: int, height: int, keywords: str = "", image_type: str = "general") -> str:
+    """
+    Generate reliable image URLs with multiple fallback strategies
+    """
+    if image_type == "avatar":
+        # For avatars, use multiple services with fallbacks
+        gender = random.choice(["men", "women"])
+        number = random.randint(0, 99)
+        avatar_services = [
+            f"https://randomuser.me/api/portraits/{gender}/{number}.jpg",
+            f"https://i.pravatar.cc/{min(width, height)}?img={random.randint(1, 70)}",
+            f"https://avatars.dicebear.com/api/human/{random.randint(1, 1000)}.svg",
+        ]
+        return random.choice(avatar_services)
+    
+    # For general images, use multiple reliable services
+    if keywords:
+        # Clean and format keywords
+        clean_keywords = re.sub(r'[^a-zA-Z0-9,\s]', '', keywords).strip()
+        keyword_list = [k.strip() for k in clean_keywords.split(',') if k.strip()]
+        if keyword_list:
+            primary_keyword = keyword_list[0]
+            # Use Lorem Picsum with seed for consistency
+            seed = abs(hash(primary_keyword)) % 1000
+            return f"https://picsum.photos/seed/{seed}/{width}/{height}"
+    
+    # Fallback options in order of reliability
+    general_services = [
+        f"https://picsum.photos/{width}/{height}",  # Lorem Picsum - most reliable
+        f"https://placehold.co/{width}x{height}/png",  # Placehold.co
+        f"https://via.placeholder.com/{width}x{height}/0066CC/FFFFFF?text=Image",  # Via Placeholder
+    ]
+    
+    return random.choice(general_services)
+
+# --- ENHANCED RULESET WITH RELIABLE IMAGES ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
     "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
     "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background.\n"
-    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this, you MUST ONLY use the following two services. NO OTHER placeholder services are allowed.\n"
-    "    - **For all thematic, background, or object images:** Use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Example: `<img src=\"https://source.unsplash.com/random/800x600?technology,office\">`. Use creative, descriptive keywords relevant to the user's prompt.\n"
-    "    - **For all user avatars or profile photos:** Use the `randomuser.me/api/portraits/` service. You must include the gender (`men`/`women`) and a number (0-99). Example: `<img src=\"https://randomuser.me/api/portraits/women/45.jpg\">`."
+    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. Use ONLY these reliable services:\n"
+    "    - **For general/thematic images:** Use `https://picsum.photos/WIDTHxHEIGHT` or `https://picsum.photos/seed/SEED/WIDTHxHEIGHT` (where SEED is any number 1-1000).\n"
+    "    - **For user avatars:** Use `https://i.pravatar.cc/SIZE?img=NUMBER` (where SIZE is pixels and NUMBER is 1-70).\n"
+    "    - **For simple placeholders:** Use `https://placehold.co/WIDTHxHEIGHT/png`.\n"
+    "    - **Examples:** `<img src=\"https://picsum.photos/800/600\" alt=\"Hero image\">`, `<img src=\"https://i.pravatar.cc/150?img=25\" alt=\"User avatar\">`\n"
+    "4.  **IMAGE ATTRIBUTES:** Always include proper `alt` attributes and `loading=\"lazy\"` for performance.\n"
+    "5.  **RESPONSIVENESS:** Use responsive image classes like `w-full h-auto object-cover`.\n"
 )
 
-# --- Supercharged System Prompts (Using the definitive ruleset) ---
+# --- Supercharged System Prompts (Using the new, strong ruleset) ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer creating a stunning, complete webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
@@ -81,7 +122,67 @@ GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     f"{MANDATORY_RULESET}"
 )
 
-# --- Helper Functions (Cleaned up, no more image fixing) ---
+# --- Helper Functions (Enhanced with image processing) ---
+def enhance_html_images(html_content: str) -> str:
+    """
+    Post-process HTML to ensure all images use reliable services
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        alt = img.get('alt', 'Image')
+        
+        # Skip if already using our recommended services
+        if any(service in src for service in ['picsum.photos', 'i.pravatar.cc', 'placehold.co', 'via.placeholder.com']):
+            continue
+            
+        # Extract dimensions if possible
+        width = 800
+        height = 600
+        
+        # Try to get dimensions from classes or style
+        classes = img.get('class', [])
+        if isinstance(classes, str):
+            classes = classes.split()
+            
+        # Look for Tailwind width/height classes
+        for cls in classes:
+            if cls.startswith('w-') and cls[2:].isdigit():
+                width = int(cls[2:]) * 4  # Rough conversion
+            elif cls.startswith('h-') and cls[2:].isdigit():
+                height = int(cls[2:]) * 4
+                
+        # Determine image type based on alt text or context
+        if any(keyword in alt.lower() for keyword in ['avatar', 'profile', 'user', 'person']):
+            new_src = get_reliable_image_url(min(width, height), min(width, height), "", "avatar")
+        else:
+            # Extract keywords from alt text
+            keywords = re.sub(r'[^a-zA-Z0-9\s]', ' ', alt.lower()).strip()
+            new_src = get_reliable_image_url(width, height, keywords, "general")
+            
+        img['src'] = new_src
+        
+        # Ensure proper attributes
+        if not img.get('alt'):
+            img['alt'] = 'Image'
+        if not img.get('loading'):
+            img['loading'] = 'lazy'
+            
+        # Add responsive classes if not present
+        current_classes = img.get('class', [])
+        if isinstance(current_classes, str):
+            current_classes = current_classes.split()
+        
+        responsive_classes = ['w-full', 'h-auto', 'object-cover']
+        for cls in responsive_classes:
+            if cls not in current_classes:
+                current_classes.append(cls)
+                
+        img['class'] = ' '.join(current_classes)
+    
+    return str(soup)
+
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -116,7 +217,10 @@ def clean_html_snippet(text: str) -> str:
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     try:
-        soup = BeautifulSoup(html_content, 'html.parser')
+        # First enhance images
+        enhanced_html = enhance_html_images(html_content)
+        
+        soup = BeautifulSoup(enhanced_html, 'html.parser')
         css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
         prefixed_css = prefix_css_rules(css_content, container_id)
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
@@ -135,7 +239,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- AI Core Functions (Kept from modern version) ---
+# --- AI Core Functions ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
     model_id = MODEL_MAPPING_TOGETHER.get(model_key)
     if not model_id:
@@ -154,7 +258,7 @@ def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str
 
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
     try:
-        if model_key == "gemini-2.5-flash-lite":
+        if "gemini" in model_key:
             return generate_with_google(system_prompt, user_prompt, model_key)
         else:
             return generate_with_together(system_prompt, user_prompt, model_key)
@@ -171,12 +275,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.get("/", response_class=HTMLResponse)
 async def root(): 
-    return "<h1>NeuroArti Pro Builder API is operational.</h1>"
+    return "<h1>NeuroArti Pro Builder API is operational with Enhanced Image Support.</h1>"
 
-# --- API Endpoints (Simplified to trust the AI) ---
+# --- API Endpoints ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
-    if request.model == "gemini-2.5-flash-lite":
+    if "gemini" in request.model:
         system_prompt = GEMINI_2_5_LITE_SUPERCHARGED_PROMPT
     elif request.model == "deepseek-r1":
         system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
@@ -222,15 +326,19 @@ async def create_edit_snippet(request: EditSnippetRequest):
     modified_snippet_raw = generate_code(system_prompt, user_prompt, request.model)
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
+    # Enhance images in the snippet
     if cleaned_snippet and '<' in cleaned_snippet:
-        return {"snippet": cleaned_snippet}
+        enhanced_snippet = enhance_html_images(cleaned_snippet)
+        return {"snippet": enhanced_snippet}
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
+        # Note: The 'container_id' is now sent in the PatchRequest
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
+        
         element_to_modify = soup.select_one(request.parent_selector)
         if not element_to_modify:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
@@ -241,9 +349,10 @@ async def patch_html(request: PatchRequest):
         
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-        
-        new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
-        
+            
+        # Enhance images in the new snippet
+        enhanced_snippet = enhance_html_images(request.new_parent_snippet)
+        new_snippet_soup = BeautifulSoup(enhanced_snippet, 'html.parser')
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
@@ -259,12 +368,35 @@ async def patch_html(request: PatchRequest):
             raise HTTPException(status_code=500, detail="Container element was lost after patching.")
         
         body_html = ''.join(str(c) for c in final_container_div.contents)
+        # We return the css/js so the frontend state remains consistent
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
+
+# --- New endpoint for testing image services ---
+@app.get("/test-images")
+async def test_images():
+    """Test endpoint to verify image services are working"""
+    test_images = {
+        "lorem_picsum": "https://picsum.photos/300/200",
+        "lorem_picsum_seeded": "https://picsum.photos/seed/123/300/200",
+        "pravatar": "https://i.pravatar.cc/150?img=25",
+        "placehold": "https://placehold.co/300x200/png",
+        "via_placeholder": "https://via.placeholder.com/300x200/0066CC/FFFFFF?text=Test"
+    }
+    
+    return {
+        "message": "Image service test endpoints",
+        "services": test_images,
+        "html_test": f"""
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; padding: 1rem;">
+            {' '.join([f'<div><h3>{name}</h3><img src="{url}" alt="{name}" style="width: 100%; height: auto; border: 1px solid #ccc;"></div>' for name, url in test_images.items()])}
+        </div>
+        """,
+    }
 
 if __name__ == "__main__":
     import uvicorn
