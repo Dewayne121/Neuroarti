@@ -20,7 +20,7 @@ def is_the_same_html(current_html: str) -> bool:
         soup = BeautifulSoup(html_str, 'html.parser')
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
-        return ' '.join(soup.get_text(strip=true).split())
+        return ' '.join(soup.get_text(strip=True).split())  # Fixed: strip=True instead of strip=true
     return normalize(DEFAULT_HTML) == normalize(current_html)
 
 def apply_diff_patch(original_html: str, ai_response: str) -> str:
@@ -72,11 +72,10 @@ def extract_first_html_element(raw_text: str) -> str:
     """
     if not raw_text:
         return ""
-
     text_to_parse = raw_text.strip()
-
+    
     # Step 1: Prioritize markdown code blocks.
-    markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
+    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
     else:
@@ -86,21 +85,28 @@ def extract_first_html_element(raw_text: str) -> str:
             text_to_parse = text_to_parse[first_tag_match.start():]
         else:
             return "" # No HTML tags found.
-
-    # Step 3: Use BeautifulSoup's find() method to directly get the first tag.
-    # This is the most reliable way to handle both simple (<h1>) and complex (<section>) elements
-    # and inherently prevents duplication.
+    
+    # Step 3: Use BeautifulSoup to parse the HTML and extract the first element
     try:
         soup = BeautifulSoup(text_to_parse, 'html.parser')
-        first_element = soup.find(lambda tag: isinstance(tag, Tag))
+        
+        # Find the first tag that's not just whitespace
+        first_element = None
+        for tag in soup.find_all(lambda tag: isinstance(tag, Tag)):
+            if tag.get_text(strip=True) or tag.name in ['img', 'br', 'hr', 'input']:
+                first_element = tag
+                break
         
         if first_element:
-            return str(first_element)
+            # For self-closing tags, ensure they're properly formatted
+            if first_element.name in ['img', 'br', 'hr', 'input']:
+                return str(first_element)
+            # For other tags, ensure they have proper opening and closing tags
+            return f"<{first_element.name}{ ''.join(f' {k}=\"{v}\"' for k, v in first_element.attrs.items()) }>{first_element.encode_contents().decode('utf-8')}</{first_element.name}>"
         return ""
     except Exception as e:
         print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
         return ""
-
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     """Extracts CSS, JS, and body content from a full HTML document, REMOVING COMMENTS."""
