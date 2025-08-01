@@ -108,22 +108,18 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         full_soup = BeautifulSoup(body.html, 'html.parser')
         selected_soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
         
-        # Get the first (and should be only) element from the selected HTML
         selected_element_parsed = selected_soup.find()
         if not selected_element_parsed:
             raise Exception("Could not parse the selected element HTML.")
         
-        # Find the target element using a more robust approach
-        # We'll look for elements with matching tag, classes, and content
         target_element = None
         
-        # Strategy 1: Try exact string match first (fastest)
-        for element in full_soup.find_all():
-            if str(element) == body.selectedElementHtml:
-                target_element = element
-                break
-        
-        # Strategy 2: If exact match fails, try matching by tag, attributes, and text content
+        # Strategy 1: Try exact string match first (fastest and most precise)
+        possible_targets = full_soup.find_all(lambda tag: str(tag) == body.selectedElementHtml)
+        if possible_targets:
+            target_element = possible_targets[0]
+
+        # Strategy 2: If exact match fails, try a more semantic match
         if not target_element:
             tag_name = selected_element_parsed.name
             element_text = selected_element_parsed.get_text(strip=True)
@@ -131,31 +127,12 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
             
             candidates = full_soup.find_all(tag_name)
             for candidate in candidates:
-                # Check if text content matches
                 if candidate.get_text(strip=True) == element_text:
-                    # Check if key attributes match (like class, id)
-                    attrs_match = True
-                    for key, value in element_attrs.items():
-                        if candidate.get(key) != value:
-                            attrs_match = False
-                            break
-                    
+                    attrs_match = all(candidate.get(key) == value for key, value in element_attrs.items())
                     if attrs_match:
                         target_element = candidate
                         break
         
-        # Strategy 3: If still not found, try matching just by tag and classes
-        if not target_element and selected_element_parsed.get('class'):
-            tag_name = selected_element_parsed.name
-            element_classes = selected_element_parsed.get('class', [])
-            
-            candidates = full_soup.find_all(tag_name)
-            for candidate in candidates:
-                candidate_classes = candidate.get('class', [])
-                if set(element_classes) == set(candidate_classes):
-                    target_element = candidate
-                    break
-
         if not target_element:
             raise Exception("The selected element could not be found in the full HTML document. This might happen if the page was modified after selection.")
 
@@ -194,4 +171,4 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
