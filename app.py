@@ -42,11 +42,10 @@ TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 if not TOGETHER_API_KEY:
-    raise ValueError("TOGETHER_API_KEY not found. Please set it in your environment variables.")
+    raise ValueError("TOGETHER_API_KEY not found.")
 if not GOOGLE_API_KEY:
     print("Warning: GOOGLE_API_KEY not found. The Gemini model will not be available.")
 
-# Configure clients
 together_client = OpenAI(api_key=TOGETHER_API_KEY, base_url="https://api.together.xyz/v1")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -56,46 +55,37 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Supercharged System Prompts with Smarter Image Sourcing ---
-
-# KEY CHANGE: All prompts now have enhanced, more creative image instructions.
-GENERIC_IMAGE_PROMPT_INSTRUCTION = (
-    "**Image Sourcing (VERY IMPORTANT):** To ensure all images work, you MUST use the following services:"
-    "\n- **For all thematic, background, or object images:** Use the `source.unsplash.com` service. The URL MUST be in the format `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword1,keyword2,keyword3`. Be creative and use multiple, descriptive keywords to get the best and most varied images. For example, for a hero image about a tech startup, use something like `<img src=\"https://source.unsplash.com/random/1600x900?technology,collaboration,modern,office\" alt=\"A modern office with people collaborating on technology.\">`"
-    "\n- **For all user avatars or profile photos:** Use the `randomuser.me` portrait API. For example: `<img src=\"https://randomuser.me/api/portraits/women/44.jpg\" alt=\"User avatar\">`"
+# --- FIX: The Mandatory Ruleset for High-Quality Output ---
+MANDATORY_RULESET = (
+    "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
+    "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`."
+    "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background."
+    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this:"
+    "    - For all thematic, background, or object images, you MUST use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Use creative, descriptive keywords."
+    "    - For all user avatars or profile photos, you MUST use the `randomuser.me/api/portraits/` service."
 )
 
+# --- Supercharged System Prompts (Now with the Mandatory Ruleset) ---
 GLM_SUPERCHARGED_PROMPT = (
-    "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
-    "Your response MUST BE ONLY the full, valid HTML code. Start immediately with `<!DOCTYPE html>`."
-    "\n\n**-- MANDATORY TECHNICAL SPECIFICATIONS --**"
-    f"\n4.  **Content & Imagery:**\n    - Generate rich, relevant, and plausible placeholder content.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
-    # Other sections are unchanged and included implicitly
+    "You are an elite AI web developer creating a stunning, complete webpage. "
+    "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
+    f"{MANDATORY_RULESET}"
 )
 
 DEEPSEEK_SUPERCHARGED_PROMPT = (
-    "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents. "
-    "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`."
-    "\n\n**-- TECHNICAL DIRECTIVES --**"
-    f"\n3.  **Component-Level Detail:**\n    - Generate high-fidelity components.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
-    # Other sections are unchanged and included implicitly
+    "You are a top-tier frontend architect AI writing a production-ready, single-file HTML document. "
+    "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`.\n\n"
+    f"{MANDATORY_RULESET}"
 )
 
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
-    "You are a world-class AI developer writing single-file HTML webpages. "
-    "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`."
-    "\n\n**-- CORE REQUIREMENTS --**"
-    "\n1.  **Framework:** HTML5 and Tailwind CSS from CDN."
-    "\n2.  **Structure:** Comprehensive multi-section page (header, main with sections, footer)."
-    "\n3.  **Responsiveness:** Mobile-first is a strict requirement."
-    f"\n4.  **Content and Imagery:**\n    - Populate the page with high-quality placeholder text.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
-    "\n5.  **User Experience:** Incorporate subtle animations and transitions."
+    "You are a world-class AI developer writing a clean, modern, single-file HTML webpage. "
+    "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
+    f"{MANDATORY_RULESET}"
 )
-
 
 # --- Helper Functions (unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
-    # ... (code is correct and unchanged)
     if not container_id: return css_content
     def prefixer(match):
         selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
@@ -106,7 +96,6 @@ def prefix_css_rules(css_content: str, container_id: str) -> str:
                          css_content, flags=re.DOTALL)
     return css_content
 def clean_chatter_and_invalid_tags(soup_or_tag):
-    # ... (code is correct and unchanged)
     if not hasattr(soup_or_tag, 'children'): return
     nodes_to_remove = [child for child in list(soup_or_tag.children) 
                        if (isinstance(child, NavigableString) and child.string.strip() and soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main']) 
@@ -116,18 +105,15 @@ def clean_chatter_and_invalid_tags(soup_or_tag):
         if hasattr(child, 'name'):
             clean_chatter_and_invalid_tags(child)
 def isolate_html_document(raw_text: str) -> str:
-    # ... (code is correct and unchanged)
     doctype_start = raw_text.lower().find('<!doctype html')
     return raw_text[doctype_start:] if doctype_start != -1 else ""
 def clean_html_snippet(text: str) -> str:
-    # ... (code is correct and unchanged)
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
     if soup.body:
         return ''.join(str(c) for c in soup.body.contents)
     return str(soup)
 def extract_assets(html_content: str, container_id: str) -> tuple:
-    # ... (code is correct and unchanged)
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
@@ -150,42 +136,24 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
 
 # --- Refactored AI Core Functions (unchanged) ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
-    # ... (code is correct and unchanged)
     model_id = MODEL_MAPPING_TOGETHER.get(model_key)
     if not model_id:
         raise HTTPException(status_code=400, detail=f"Invalid model key for Together AI: {model_key}")
-    
-    response = together_client.chat.completions.create(
-        model=model_id,
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-        temperature=0.1, max_tokens=8192,
-    )
+    response = together_client.chat.completions.create(model=model_id, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], temperature=0.1, max_tokens=8192)
     return response.choices[0].message.content or ""
 def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str):
-    # ... (code is correct and unchanged)
     if not GOOGLE_API_KEY:
          raise HTTPException(status_code=503, detail="Google API key not configured. Gemini model is unavailable.")
-    
     model = genai.GenerativeModel(model_id_str)
     full_prompt = f"{system_prompt}\n\nUSER PROMPT: {user_prompt}"
-    
-    safety_settings = {
-        'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
-        'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
-        'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
-        'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
-    }
-    
+    safety_settings = {'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'}
     response = model.generate_content(full_prompt, safety_settings=safety_settings)
     return response.text
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
-    # ... (code is correct and unchanged)
     try:
         if model_key == "gemini-2.5-flash-lite":
-            print(f"Generating code with Google Gemini: {model_key}")
             return generate_with_google(system_prompt, user_prompt, model_key)
         else:
-            print(f"Generating code with Together AI: {model_key}")
             return generate_with_together(system_prompt, user_prompt, model_key)
     except Exception as e:
         print(f"Error calling AI model {model_key}: {e}")
@@ -193,7 +161,6 @@ def generate_code(system_prompt: str, user_prompt: str, model_key: str):
              error_detail = e.body['error'].get('message', str(e))
              raise HTTPException(status_code=502, detail=f"AI service error: {error_detail}")
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
-
 
 # --- FastAPI App (Unchanged) ---
 app = FastAPI()
@@ -204,33 +171,25 @@ async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 # --- API Endpoints ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
-    # This logic now correctly uses the enhanced prompts defined above
     if request.model == "gemini-2.5-flash-lite":
         system_prompt = GEMINI_2_5_LITE_SUPERCHARGED_PROMPT
     elif request.model == "deepseek-r1":
         system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
-    else: # Default to GLM
+    else:
         system_prompt = GLM_SUPERCHARGED_PROMPT
-
     raw_code = generate_code(system_prompt, request.prompt, request.model)
     html_document = isolate_html_document(raw_code)
-    
     if html_document:
         container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
         body_html, css, js = extract_assets(html_document, container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
-    
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
-
 
 @app.post("/update")
 async def update_build(request: UpdateRequest):
-    # KEY CHANGE: Update prompt with reliable image sourcing rules
     system_prompt = (
-        "You are an expert web developer modifying an existing webpage. "
-        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure and design system. "
-        f"**CRITICAL:** Ensure the updated code remains fully responsive. {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
-        "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html>. No explanations or markdown."
+        "You are an expert web developer modifying an existing webpage. Your response MUST be the complete, updated HTML file.\n\n"
+        f"{MANDATORY_RULESET}"
     )
     full_html_for_ai = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div></body><script>{request.js}</script></html>"""
     user_prompt = f"USER REQUEST: '{request.prompt}'\n\nCURRENT WEBSITE CODE:\n{full_html_for_ai}"
@@ -243,12 +202,10 @@ async def update_build(request: UpdateRequest):
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
-    # KEY CHANGE: Update prompt with reliable image sourcing rules
     system_prompt = (
-        "You are a context-aware HTML modification tool. Your task is to modify the element after the `<!-- EDIT_TARGET -->` comment. "
-        "You MUST preserve the surrounding elements and adhere to existing design patterns. "
-        f"**IMPORTANT:** Ensure your changes are responsive. {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
-        "Your response MUST be ONLY the modified, larger HTML snippet. NO explanations."
+        "You are a context-aware HTML modification tool. Modify the element after the `<!-- EDIT_TARGET -->` comment. "
+        "Your response MUST be ONLY the modified HTML snippet.\n\n"
+        f"{MANDATORY_RULESET}"
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, request.model)
@@ -259,33 +216,30 @@ async def create_edit_snippet(request: EditSnippetRequest):
 
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
-    # This endpoint's logic is correct and unchanged
     try:
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
         element_to_modify = soup.select_one(request.parent_selector)
         if not element_to_modify:
-            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found in document.")
+            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
         container_in_soup = soup.select_one(f"#{request.container_id}")
         if not container_in_soup:
-            raise HTTPException(status_code=500, detail="Internal Error: Could not find container in parsed soup.")
+            raise HTTPException(status_code=500, detail="Internal Error: Could not find container.")
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
-            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet from AI response.")
+            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
         if element_to_modify == container_in_soup:
-            print("Performing top-level patch. Clearing and appending content.")
             element_to_modify.clear()
             for node in new_contents:
                 element_to_modify.append(node)
         else:
-            print(f"Performing nested patch on selector: {request.parent_selector}")
             element_to_modify.replace_with(*new_contents)
         final_container_div = soup.select_one(f'#{request.container_id}')
         if not final_container_div:
-            raise HTTPException(status_code=500, detail="Container element was lost after patching HTML.")
+            raise HTTPException(status_code=500, detail="Container element was lost after patching.")
         body_html = ''.join(str(c) for c in final_container_div.contents)
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
