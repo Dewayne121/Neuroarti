@@ -6,4 +6,3 @@ python-multipart
 pydantic
 beautifulsoup4
 google-generativeai
-requests
