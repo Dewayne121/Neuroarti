@@ -423,7 +423,7 @@ async def update_build(request: UpdateRequest):
         # Apply smart image fixing
         fixed_html_document = await fix_image_sources_smart(html_document)
         
-        body_html, css, js = extract_assets(fixed_html_document, container_id)
+        body_html, css, js = extract_assets(fixed_html_document, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
         
     raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
@@ -481,7 +481,8 @@ async def patch_html(request: PatchRequest):
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
-        if isinstance(e, HTTPException:
+        # THIS IS THE CORRECTED LINE
+        if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
