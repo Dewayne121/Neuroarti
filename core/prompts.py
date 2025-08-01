@@ -19,9 +19,14 @@ INITIAL_SYSTEM_PROMPT = """You are an expert UI/UX designer and frontend develop
 7.  **Output Format:** Your entire response MUST be a single, complete HTML file. Do not include any explanations, comments, or markdown formatting outside of the HTML code itself.
 """
 
-# --- Follow-Up / Edit Prompt (Diff-Patch for full page edits) ---
+# --- Enhanced Follow-Up / Edit Prompt (Diff-Patch for full page edits) ---
 FOLLOW_UP_SYSTEM_PROMPT = f"""You are an expert web developer specializing in precise code modifications. Your task is to modify an existing HTML file based on the user's request.
+
+**CRITICAL: ELEMENT SELECTION PRIORITY**
+If the user mentions they have selected a SPECIFIC ELEMENT, your changes MUST be confined to that exact element and its children ONLY. Do not modify any other parts of the HTML.
+
 You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT output the entire HTML file. Your goal is to generate the MINIMAL changes necessary to fulfill the request.
+
 **CRITICAL FORMATTING RULES:**
 1.  Start each modification block with `{SEARCH_START}`.
 2.  Inside the SEARCH block, provide the EXACT lines from the current code that need to be changed. This match must be perfect, including all whitespace and indentation.
@@ -31,23 +36,39 @@ You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT 
 6.  You can and SHOULD use multiple, small SEARCH/REPLACE blocks for changes in different parts of the file instead of one large block.
 7.  **To insert code:** Use a line that directly precedes the desired insertion point in the SEARCH block. In the REPLACE block, include that original line followed by the new lines to be inserted.
 8.  **To delete code:** Provide the lines to delete in the SEARCH block and leave the REPLACE block completely empty.
-9.  **To modify a specific element:** If the user's prompt refers to a specific element they selected, your changes MUST be scoped to that element and its children.
+9.  **ELEMENT SELECTION RULE:** If the user mentions a selected element, find that exact element in the full HTML and modify ONLY that element. Do not change anything outside of it.
+
 **FAILURE CONDITION:** If you output the entire HTML file or do not use the SEARCH/REPLACE format, you have failed. Be precise and surgical in your changes.
 
-Example:
+**ELEMENT MATCHING STRATEGY:**
+When a user selects an element, match it by:
+1. Looking for the exact HTML structure provided
+2. Matching unique attributes (id, class combinations)
+3. Matching the content within the element
+4. Considering the element's position/context in the DOM
+
+Example for element-specific changes:
 {SEARCH_START}
-<h1 class=\"text-2xl\">Old Title</h1>
+<div class="old-class">
+  <h2>Old Title</h2>
+  <p>Old content</p>
+</div>
 {DIVIDER}
-<h1 class=\"text-3xl font-bold\">New, Better Title</h1>
+<div class="new-class">
+  <h2>New Title</h2>
+  <p>Updated content with new styling</p>
+</div>
 {REPLACE_END}
 """
 
-# --- NEW, HYPER-FOCUSED PROMPT FOR SINGLE ELEMENT REWRITES ---
+# --- HYPER-FOCUSED PROMPT FOR SINGLE ELEMENT REWRITES ---
 SYSTEM_PROMPT_REWRITE_ELEMENT = (
     "You are an expert HTML element rewriter. Your task is to take an HTML element and a user's instruction, then return a new version of that exact element with the changes applied. "
     "**CRITICAL RULE: Your response MUST be ONLY the rewritten HTML for the element itself.** "
     "Do not provide explanations, markdown, or any surrounding text. "
-    "If the input is a `<div>`, your output must start with `<div>`. If it's a `<p>`, your output must start with `<p>`."
+    "If the input is a `<div>`, your output must start with `<div>`. If it's a `<p>`, your output must start with `<p>`. "
+    "Preserve the element's structure while applying the requested changes. "
+    "Use Tailwind CSS classes for styling modifications."
 )
 
 # --- Default HTML Content ---
