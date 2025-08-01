@@ -37,7 +37,7 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration (Simplified: No Pexels Key Needed) ---
+# --- Configuration (Unchanged) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
@@ -55,77 +55,66 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- The NEW Lightning-Fast Image Engine ---
-
+# --- Image Engine (Fast & Reliable - Unchanged) ---
 def get_guaranteed_fallback_images() -> List[str]:
-    """A list of high-quality, proven image URLs to use as a fallback."""
     return [
         "https://images.unsplash.com/photo-1557683316-973673baf926?w=1260&q=80",
         "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1260&q=80",
         "https://images.unsplash.com/photo-1488998427799-e3362cec87c3?w=1260&q=80",
-        "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=1260&q=80",
-        "https://images.unsplash.com/photo-1501630834273-4b5604d2ee31?w=1260&q=80"
     ]
-
 def extract_image_context(img_tag: BeautifulSoup) -> str:
-    """Extracts a search query from the alt text."""
-    alt_text = img_tag.get('alt', '').strip()
-    return alt_text if len(alt_text) > 5 else ""
-
+    return img_tag.get('alt', '').strip() if len(img_tag.get('alt', '')) > 5 else ""
 def fix_image_sources_fast(html_content: str) -> str:
-    """Instantly replaces image placeholders with dynamic Unsplash URLs or high-quality fallbacks."""
     if not html_content: return ""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         images = soup.find_all('img')
-        
         for img in images:
             context_query = extract_image_context(img)
             image_url = ""
-            
             if context_query:
-                # Instantly create a dynamic URL. No network call needed on the server.
                 keywords = re.sub(r'[^a-zA-Z0-9\s,]', '', context_query).replace(' ', ',')
                 image_url = f"https://source.unsplash.com/random/1200x800/?{keywords}"
             else:
-                # If no context, use one of the guaranteed beautiful images.
                 image_url = random.choice(get_guaranteed_fallback_images())
-            
             img['src'] = image_url
             if not img.get('alt'): img['alt'] = "High-quality decorative image"
             img['loading'] = 'lazy'
-            
             img_classes = img.get('class', [])
             if 'object-cover' not in img_classes: img_classes.append('object-cover')
             if 'w-full' not in img_classes: img_classes.append('w-full')
             if 'h-full' not in img_classes: img_classes.append('h-full')
             img['class'] = img_classes
-
         return str(soup)
     except Exception as e:
         print(f"Error in fix_image_sources_fast: {e}")
         return html_content
 
-# --- High-Quality Creative Brief (Unchanged) ---
+# --- THE NEW AESTHETIC SUPER-PROMPT ---
 SUPERCHARGED_DESIGN_BRIEF = (
-    "You are 'Vortex,' an elite AI frontend architect renowned for creating visually stunning, modern, and award-winning websites. You will generate a single, complete HTML file using Tailwind CSS via a CDN link.\n\n"
-    "**VORTEX'S CORE DESIGN PHILOSOPHY (You MUST adhere to this):**\n\n"
-    "1.  **Layout & Spacing:**\n"
-    "    - **Embrace Whitespace:** Use generous padding (`p-8`, `py-16`, `px-12`) to let content breathe. Avoid cramped layouts.\n"
-    "    - **Modern Grid & Flexbox:** Use CSS Grid (`grid`, `grid-cols-2`, `lg:grid-cols-3`) for feature sections and Flexbox (`flex`, `justify-between`, `items-center`) for headers, footers, and component alignment.\n"
-    "    - **Varied Layouts:** Each `<section>` must have a different and interesting layout. Use alternating image-and-text sections, centered content, and multi-column grids.\n\n"
-    "2.  **Color & Typography:**\n"
-    "    - **Sophisticated Palette:** Use a harmonious color scheme. Typically a dark background (e.g., `bg-slate-900` or `bg-gray-950`), a lighter content background (e.g., `bg-slate-800`), a strong primary/accent color (e.g., `blue-500`, `indigo-600`), and light text (`text-slate-200`, `text-gray-400`).\n"
-    "    - **Typographic Hierarchy:** Use a clear hierarchy. Large, bold headings (`text-4xl`, `font-bold`), smaller subheadings, and legible body text (`text-lg`, `text-slate-300`).\n"
-    "    - **High Contrast is NON-NEGOTIABLE:** All text must be easily readable against its background.\n\n"
-    "3.  **Components & Interactivity:**\n"
-    "    - **Rich Component Library:** Your page MUST include several of these: a compelling hero section with a clear call-to-action button, a multi-item feature grid with inline SVG icons, a customer testimonial section, a pricing table, and a contact form.\n"
-    "    - **Subtle Polish:** Use smooth transitions on interactive elements (`transition-all`, `duration-300`) and subtle hover effects (`hover:-translate-y-1`, `hover:scale-105`, `hover:shadow-lg`).\n\n"
-    "4.  **Content & Images:**\n"
-    "    - **Image Integration:** Use `<img>` tags liberally. **Your only task is to write a highly descriptive `alt` attribute.** For example: `<img alt=\"A minimalist workspace with a laptop and a cup of coffee\">`. The system will handle finding the perfect image. The quality of your `alt` text is critical for a good result.\n\n"
+    "You are 'Aether,' an award-winning digital artist and frontend developer. Your mission is to create a single, standalone HTML file that is not just a webpage, but a piece of art. It must be aesthetically breathtaking, functional, and perfectly tailored to the user's prompt.\n\n"
+    "**AETHER'S DESIGN MANIFESTO (MANDATORY):**\n\n"
+    "1.  **THE ART OF CSS:** You are a CSS master. You will write rich, detailed custom CSS inside the `<style>` tag. You are NOT limited to utility classes.\n"
+    "    - **Color Palette:** You MUST define a sophisticated color palette using CSS variables (`:root { --primary: #...; --dark: #...; }`) and use these variables throughout the CSS.\n"
+    "    - **Typography:** You MUST import two complementary fonts from Google Fonts (e.g., a serif for headings, a sans-serif for body text) and define a clear typographic hierarchy.\n\n"
+    "2.  **LAYOUT & COMPOSITION:**\n"
+    "    - **No Boring Stacks:** Every section must have a unique, interesting layout. Use CSS Grid and Flexbox to create asymmetrical designs, overlapping elements, and a dynamic visual flow.\n"
+    "    - **Breathe with Whitespace:** Use generous padding and margins to create a clean, high-end feel. Avoid clutter at all costs.\n\n"
+    "3.  **INTERACTIVE ELEGANCE:** The page must feel alive.\n"
+    "    - **JavaScript Animations:** You MUST include JavaScript in the `<script>` tag to create 'animate on scroll' effects, using the `IntersectionObserver` API to fade-in or slide-in elements as they enter the viewport.\n"
+    "    - **Subtle Polish:** All interactive elements (links, buttons, cards) MUST have smooth `transition` effects and engaging `hover` states (e.g., transform, box-shadow).\n\n"
+    "4.  **COMPONENT MASTERY:** The page must be feature-rich.\n"
+    "    - **Hero Section:** Create a stunning, full-height hero section with a compelling headline and a background image with a gradient overlay.\n"
+    "    - **Feature/Product Grids:** Design beautiful cards with images, text, and hover effects.\n"
+    "    - **Testimonials & Footers:** Include styled testimonial sections (blockquotes) and a detailed, multi-column footer.\n\n"
+    "5.  **IMAGE INTEGRATION:**\n"
+    "    - **Descriptive `alt` Tags are CRITICAL:** Your only job for images is to write a highly descriptive `alt` attribute. The system will handle finding the image. Example: `<img alt='A sleek, modern desk with a laptop displaying code and a steaming cup of coffee'>`.\n\n"
     "**TECHNICAL DIRECTIVES:**\n"
-    "- Your entire response is ONLY the raw HTML code. Start immediately with `<!DOCTYPE html>`."
+    "- Your response is ONE single HTML file.\n"
+    "- Start immediately with `<!DOCTYPE html>`. No explanations, no markdown.\n"
+    "- All CSS goes in `<style>`. All JS goes in `<script>`. No external files."
 )
+
 
 # --- AI Core Functions (Unchanged) ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
@@ -196,7 +185,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
 @app.get("/", response_class=HTMLResponse)
 async def root(): return "<h1>NeuroArti Pro Builder API is operational with High-Quality Design Engine.</h1>"
 
-# --- API Endpoints (Now using the fast image fixer) ---
+# --- API Endpoints (Using the new Aesthetic Super-Prompt) ---
 @app.post("/build")
 def create_build(request: BuildRequest):
     raw_code = generate_code(SUPERCHARGED_DESIGN_BRIEF, request.prompt, request.model)
