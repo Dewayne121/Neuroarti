@@ -13,7 +13,7 @@ from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
-    SEARCH_START  # FIXED: Added missing import
+    SEARCH_START
 )
 from core.models import MODELS
 from core.utils import (
@@ -90,10 +90,8 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
 
-    # FIXED: Enhanced user prompt construction with better element selection handling
     user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is: '{body.prompt}'"
     
-    # FIXED: Better handling of selected element
     if body.selectedElementHtml and body.selectedElementHtml.strip():
         user_prompt += f"\n\nIMPORTANT: I have selected a SPECIFIC ELEMENT to modify. Please confine your changes to ONLY this element and its children. Here is the selected element:\n```html\n{body.selectedElementHtml}\n```\n\nYou MUST find this exact element in the full HTML above and modify ONLY this element."
 
@@ -102,10 +100,9 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     soup = BeautifulSoup(body.html, 'html.parser')
     original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
 
-    # FIXED: Better validation of patch instructions
     if not patch_instructions or not patch_instructions.strip() or SEARCH_START not in patch_instructions:
         print("Warning: AI returned an invalid patch. No changes applied.")
-        print(f"AI Response: {patch_instructions[:200]}...")  # Debug logging
+        print(f"AI Response: {patch_instructions[:200]}...")
         return JSONResponse(content={
             "ok": True, 
             "html": original_body_content, 
@@ -117,20 +114,19 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     try:
         updated_full_html = apply_diff_patch(body.html, patch_instructions)
         
-        soup = BeautifulSoup(updated_full_html, 'html.parser')
-        updated_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else ""
+        # --- FIX: Re-extract assets from the patched HTML to capture CSS/JS changes ---
+        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
 
         return JSONResponse(content={
             "ok": True,
             "html": updated_body_content,
-            "css": body.css,
-            "js": body.js,
+            "css": updated_css,
+            "js": updated_js,
             "container_id": body.container_id
         })
         
     except Exception as e:
         print(f"Error applying patch: {e}")
-        # Fallback to original content if patch fails
         return JSONResponse(content={
             "ok": True,
             "html": original_body_content,
