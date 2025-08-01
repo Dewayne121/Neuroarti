@@ -31,9 +31,12 @@ class BuildRequest(BaseModel):
     html: str | None = None
 
 class UpdateRequest(BaseModel):
-    html: str
     prompt: str
     model: str
+    html: str # Full HTML document for context
+    css: str
+    js: str
+    container_id: str
     selectedElementHtml: str | None = None
 
 app = FastAPI()
@@ -92,20 +95,26 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
 
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
 
+    soup = BeautifulSoup(body.html, 'html.parser')
+    original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+
     if not patch_instructions or SEARCH_START not in patch_instructions:
         print("Warning: AI returned an invalid patch. No changes applied.")
-        # Return the original HTML body content to prevent errors
-        soup = BeautifulSoup(body.html, 'html.parser')
-        body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
-        return JSONResponse(content={"ok": True, "html": body_content})
+        return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
 
     updated_full_html = apply_diff_patch(body.html, patch_instructions)
     
-    # THE CRITICAL FIX: Re-parse the result and extract ONLY the inner content of the body.
     soup = BeautifulSoup(updated_full_html, 'html.parser')
     updated_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else ""
 
-    return JSONResponse(content={"ok": True, "html": updated_body_content})
+    # THE CRITICAL FIX: Return the complete state, including the container_id we received.
+    return JSONResponse(content={
+        "ok": True,
+        "html": updated_body_content,
+        "css": body.css, # CSS and JS are not modified in a patch
+        "js": body.js,
+        "container_id": body.container_id # Pass the ID back to the frontend
+    })
 
 if __name__ == "__main__":
     import uvicorn
