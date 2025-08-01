@@ -1,6 +1,6 @@
 # core/utils.py
 import re
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, Tag
 from core.prompts import DEFAULT_HTML, SEARCH_START, DIVIDER, REPLACE_END
 
 # In-memory store for IP-based rate limiting
@@ -74,52 +74,44 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    More robustly extracts the first valid HTML element from a potentially messy AI response,
-    handling markdown fences and extra chatter.
+    Robustly extracts the first HTML element from a potentially messy AI response.
+    It handles markdown fences and extra chatter by prioritizing code blocks and then
+    aggressively finding the first valid tag.
     """
     if not raw_text:
         return ""
 
-    text_to_parse = raw_text
+    text_to_parse = raw_text.strip()
 
-    # 1. Prioritize finding markdown code blocks.
-    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', text_to_parse, re.DOTALL)
+    # 1. Prioritize finding markdown code blocks. This is the most reliable signal.
+    markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
     else:
-        # 2. If no markdown, find the first plausible *structural* HTML tag to avoid chatter tags like <think>.
-        # This is a more aggressive cleaning step.
-        tag_match = re.search(r'<([a-zA-Z]+[0-9]?)', text_to_parse)
-        if tag_match:
-             first_tag_name = tag_match.group(1)
-             # A simple heuristic: if the first tag is not a standard one, it might be chatter.
-             plausible_tags = ['div', 'section', 'header', 'footer', 'main', 'article', 'aside', 'ul', 'form', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'nav']
-             if first_tag_name.lower() not in plausible_tags:
-                  # Try to find the start of a more plausible tag later in the string
-                  better_match = re.search(r'<(?:' + '|'.join(plausible_tags) + r')', text_to_parse, re.IGNORECASE)
-                  if better_match:
-                       text_to_parse = text_to_parse[better_match.start():]
-             else:
-                  text_to_parse = text_to_parse[tag_match.start():]
+        # 2. If no markdown, find the start of the first HTML tag and discard everything before it.
+        # This is a more general approach than a restrictive tag list.
+        first_tag_match = re.search(r'<', text_to_parse)
+        if first_tag_match:
+            text_to_parse = text_to_parse[first_tag_match.start():]
         else:
-            return "" # No HTML tags found at all
+            return "" # No HTML found at all
 
-    # 3. Use BeautifulSoup to parse the cleaned text and extract ONLY the first valid element.
+    # 3. Use BeautifulSoup to parse the cleaned text and return the string representation of the first valid element.
     try:
         soup = BeautifulSoup(text_to_parse, 'html.parser')
         
-        # Find the first child that is a tag, ignoring NavigableString and document tags.
-        first_element = soup.find(lambda tag: tag.name is not None and tag.name not in ['html', 'body', 'head'])
-
+        # Find the first element that is a Tag, ignoring NavigableString objects
+        first_element = soup.find(lambda tag: isinstance(tag, Tag))
+        
         if first_element:
             return str(first_element)
         else:
-            print("Warning: No valid first element found by BeautifulSoup.")
+            print("Warning: BeautifulSoup found no valid element after cleaning.")
             return ""
     except Exception as e:
-        print(f"Error parsing with BeautifulSoup in extract_first_html_element: {e}")
-        # As a last resort, return the best text we found, but this might contain errors.
-        return text_to_parse
+        print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
+        # If parsing fails, we return an empty string as the content is unreliable.
+        return ""
 
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
