@@ -9,13 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
 
 from core.ai_services import generate_code
-# Import the new specialized services
-from core.singular_element_service import rewrite_singular_element
-from core.complex_element_service import rewrite_complex_element
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
+    SYSTEM_PROMPT_SURGICAL_EDIT, # Import the new prompt
     SEARCH_START
 )
 from core.models import MODELS
@@ -24,8 +22,7 @@ from core.utils import (
     is_the_same_html,
     apply_diff_patch,
     isolate_and_clean_html,
-    extract_assets,
-    is_singular_element # Import the detector function
+    extract_assets
 )
 
 load_dotenv()
@@ -46,6 +43,7 @@ class UpdateRequest(BaseModel):
 class RewriteRequest(BaseModel):
     prompt: str
     model: str
+    html: str # The full page HTML is now required
     selectedElementHtml: str
 
 app = FastAPI()
@@ -88,18 +86,14 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
         raise HTTPException(status_code=400, detail="Invalid model selected")
     user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
-    soup = BeautifulSoup(body.html, 'html.parser')
-    original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
     if not patch_instructions or SEARCH_START not in patch_instructions:
-        print("Warning: AI returned an invalid patch.")
+        # Fallback to original content if patch is invalid
+        soup = BeautifulSoup(body.html, 'html.parser')
+        original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
         return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
-    try:
-        updated_full_html = apply_diff_patch(body.html, patch_instructions)
-        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
-        return JSONResponse(content={"ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id})
-    except Exception as e:
-        print(f"Error applying patch: {e}")
-        return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
+    updated_full_html = apply_diff_patch(body.html, patch_instructions)
+    updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
+    return JSONResponse(content={"ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id})
 
 @app.put("/api/rewrite-element")
 async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
@@ -108,29 +102,54 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-    if not body.selectedElementHtml:
-        raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
+    if not body.html or not body.selectedElementHtml:
+        raise HTTPException(status_code=400, detail="Full HTML and a selected element are required.")
     
     try:
-        # The main endpoint now acts as a smart router
-        if is_singular_element(body.selectedElementHtml):
-            # Use the service dedicated to simple tags
-            rewritten_html = await rewrite_singular_element(
-                prompt=body.prompt,
-                selected_element_html=body.selectedElementHtml,
-                model=body.model
-            )
-        else:
-            # Use the service dedicated to complex components
-            rewritten_html = await rewrite_complex_element(
-                prompt=body.prompt,
-                selected_element_html=body.selectedElementHtml,
-                model=body.model
-            )
-            
-        return JSONResponse(content={"ok": True, "rewrittenHtml": rewritten_html})
+        # --- The "Surgical Marker" Method ---
+        # 1. Add a unique marker to the selected element in the full HTML
+        soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
+        selected_tag = soup.find(lambda tag: isinstance(tag, BeautifulSoup.Tag))
+        if not selected_tag:
+            raise HTTPException(status_code=400, detail="Invalid selected element HTML.")
+        
+        # This creates a version of the tag with our marker attribute
+        marked_tag_str = str(selected_tag)
+        selected_tag['data-neuro-edit-target'] = 'true'
+        marked_tag_with_attr = str(selected_tag)
+
+        # Reliably replace the original element with the marked one
+        marked_full_html = body.html.replace(marked_tag_str, marked_tag_with_attr, 1)
+
+        # 2. Create the user prompt for the AI
+        user_prompt_for_ai = (
+            f"**Full HTML Document:**\n```html\n{marked_full_html}\n```\n\n"
+            f"**User's Instruction:**\n'{body.prompt}'\n\n"
+        )
+
+        # 3. Call the AI with the new surgical prompt
+        ai_response_text = await generate_code(
+            SYSTEM_PROMPT_SURGICAL_EDIT,
+            user_prompt_for_ai,
+            body.model
+        )
+
+        # 4. Clean the response and extract assets
+        updated_full_html = isolate_and_clean_html(ai_response_text)
+        if not updated_full_html:
+            raise Exception("AI returned an empty or invalid full HTML document.")
+
+        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id")
+
+        return JSONResponse(content={
+            "ok": True,
+            "html": updated_body_content,
+            "css": updated_css,
+            "js": updated_js
+        })
+
     except Exception as e:
-        print(f"Error during element rewrite: {e}")
+        print(f"Error during surgical element rewrite: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
