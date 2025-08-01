@@ -71,45 +71,25 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Robustly extracts the first valid HTML element from a messy AI response by using a multi-stage cleaning process.
+    Extracts an HTML element from an AI response using a simple, robust strategy.
+    It prioritizes markdown code blocks, otherwise assumes the raw output is correct.
     """
     if not raw_text:
         return ""
 
     text_to_parse = raw_text.strip()
 
-    # Stage 1: Prioritize markdown code blocks, as they are the most explicit signal.
+    # 1. Prioritize markdown code blocks. This is the most reliable signal.
     markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
-        text_to_parse = markdown_match.group(1).strip()
-    else:
-        # Stage 2: If no markdown, filter out known chatter tags and find the first real HTML tag.
-        chatter_tags = ['think']
-        found_valid_start = False
-        # Find all potential tags
-        for match in re.finditer(r'<([a-zA-Z0-9]+)', text_to_parse):
-            tag_name = match.group(1).lower()
-            if tag_name not in chatter_tags:
-                # Found the first non-chatter tag, slice the string from here
-                text_to_parse = text_to_parse[match.start():]
-                found_valid_start = True
-                break
-        if not found_valid_start:
-            return "" # The entire response was likely chatter
-
-    # Stage 3: Use BeautifulSoup to parse the cleaned text and return only the first complete element.
-    # This prevents duplication if the AI mistakenly returns multiple elements.
-    try:
-        soup = BeautifulSoup(text_to_parse, 'html.parser')
-        first_element = soup.find(lambda tag: isinstance(tag, Tag))
-        
-        if first_element:
-            return str(first_element)
-        else:
-            return ""
-    except Exception as e:
-        print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
-        return ""
+        # If a markdown block is found, trust its content completely.
+        return markdown_match.group(1).strip()
+    
+    # 2. If no markdown, assume the AI followed instructions and returned only the element.
+    # This avoids over-processing clean output from well-behaved models.
+    # While this might let chatter through from misbehaving models, it's better
+    # than incorrectly returning an empty string for valid output.
+    return text_to_parse
 
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
