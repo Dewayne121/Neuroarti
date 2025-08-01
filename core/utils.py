@@ -33,10 +33,7 @@ def apply_diff_patch(original_html: str, ai_response: str) -> str:
     matches = list(pattern.finditer(ai_response))
     
     if not matches:
-        print("Warning: No valid SEARCH/REPLACE blocks found in AI response")
         return original_html
-    
-    print(f"Found {len(matches)} SEARCH/REPLACE blocks to process")
     
     for i, match in enumerate(reversed(matches)):
         search_block, replace_block = match.group(1), match.group(2)
@@ -70,44 +67,41 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Definitively extracts the first complete HTML element from a messy AI response
-    using a multi-stage cleaning and parsing pipeline.
+    Definitively extracts the first complete HTML element from a messy AI response.
+    This handles markdown, chatter, and duplication from various AI models.
     """
     if not raw_text:
         return ""
 
     text_to_parse = raw_text.strip()
 
-    # Stage 1: Prioritize markdown code blocks. This is the most reliable signal.
+    # Step 1: Prioritize markdown code blocks.
     markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
     else:
-        # Stage 2: If no markdown, find the start of the first HTML tag and discard any preceding chatter.
+        # Step 2: If no markdown, find the start of the first HTML tag and discard any preceding chatter.
         first_tag_match = re.search(r'<', text_to_parse)
         if first_tag_match:
             text_to_parse = text_to_parse[first_tag_match.start():]
         else:
-            # If no HTML tags are found at all, return empty.
-            return ""
+            return "" # No HTML tags found at all.
 
-    # Stage 3: Use BeautifulSoup to surgically parse the cleaned text and extract ONLY the first valid element.
-    # This prevents duplication if the AI mistakenly returns multiple elements.
+    # Step 3: Use BeautifulSoup to parse the cleaned text and directly find the first element.
+    # This is the most reliable way to handle both simple (<h1>) and complex (<section>...) elements.
     try:
         soup = BeautifulSoup(text_to_parse, 'html.parser')
         
-        # Find the first child that is a Tag, ignoring NavigableString objects (like whitespace or text outside tags)
-        first_element = soup.find(lambda tag: isinstance(tag, Tag))
+        # Iterate through the top-level children of the parsed document
+        for element in soup.contents:
+            if isinstance(element, Tag):
+                # Return the very first complete tag found. This prevents duplication.
+                return str(element)
         
-        if first_element:
-            return str(first_element)
-        else:
-            # This can happen if the AI responds with something like "I cannot do that." which has no tags.
-            print("Warning: BeautifulSoup found no valid element after cleaning the AI response.")
-            return ""
+        # If no top-level tags are found, return empty.
+        return ""
     except Exception as e:
         print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
-        # If parsing fails, the content is untrustworthy.
         return ""
 
 
