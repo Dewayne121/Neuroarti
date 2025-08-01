@@ -13,17 +13,31 @@ def ip_limiter(ip: str | None, max_requests: int) -> bool:
     ip_address_map[ip] = count
     return count <= max_requests
 
+def sanitize_rewritten_element(html_string: str) -> str:
+    """
+    Acts as a safety net to strip any <style> or <script> tags an AI might
+    add to a rewritten element against its instructions.
+    """
+    if not html_string:
+        return ""
+    try:
+        soup = BeautifulSoup(html_string, 'html.parser')
+        # Find and remove all <style> and <script> tags
+        for tag in soup.find_all(['style', 'script']):
+            tag.decompose()
+        return str(soup)
+    except Exception as e:
+        print(f"Error during element sanitization: {e}")
+        return html_string # Return original on failure
+
 def is_singular_element(html_string: str) -> bool:
     """
     Detects if an HTML string represents a single element with no nested tags.
-    e.g., <h1>text</h1> is singular, but <div><h1>text</h1></div> is not.
     """
     try:
         soup = BeautifulSoup(f"<div>{html_string}</div>", 'html.parser')
-        # Find the first actual tag within our wrapper.
         first_tag = soup.div.find(lambda tag: isinstance(tag, Tag))
         if first_tag:
-            # An element is singular if it contains no other tags within it.
             return not bool(first_tag.find(lambda tag: isinstance(tag, Tag)))
         return False
     except Exception:
