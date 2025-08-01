@@ -6,11 +6,11 @@ MODELS = {
         "api_provider": "together",
         "api_id": "zai-org/GLM-4.5-Air-FP8",
     },
-    # FIX: Corrected the model name and API ID for Gemini
+    # THE CRITICAL FIX: Using the correct API ID from the documentation
     "gemini-2.5-flash-lite": {
-        "label": "Gemini 2.5 Lite",
+        "label": "Gemini 2.5 Flash-Lite",
         "api_provider": "google",
-        "api_id": "gemini-1.5-flash-latest", # This is the correct API ID for the latest flash model
+        "api_id": "gemini-2.5-flash-lite", # Corrected from "gemini-1.5-flash-latest"
     },
     "deepseek-r1": {
         "label": "DeepSeek R1",
