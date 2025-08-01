@@ -11,31 +11,15 @@ from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
 import random
 
-# --- Pydantic Models (Unchanged) ---
+# --- Pydantic Models (Updated for new endpoint) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
 
-class UpdateRequest(BaseModel):
+class DiffAndPatchRequest(BaseModel):
     html: str
-    css: str
-    js: str
     prompt: str
     model: str = "glm-4.5-air"
-    container_id: str
-
-class EditSnippetRequest(BaseModel):
-    contextual_snippet: str
-    prompt: str
-    model: str = "glm-4.5-air"
-
-class PatchRequest(BaseModel):
-    html: str
-    parent_selector: str
-    new_parent_snippet: str
-    css: str
-    js: str
-    container_id: str
 
 # --- Configuration (Unchanged) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
@@ -55,201 +39,156 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE NEW INTELLIGENT IMAGE ASSISTANT ---
-
-def get_guaranteed_fallback_images() -> List[str]:
-    """A list of high-quality, proven image URLs to use as a fallback."""
-    return [
-        "https://images.unsplash.com/photo-1557683316-973673baf926?w=1260&q=80",
-        "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1260&q=80",
-        "https://images.unsplash.com/photo-1488998427799-e3362cec87c3?w=1260&q=80",
-    ]
-
-def extract_image_context(img_tag: BeautifulSoup) -> str:
-    """Extracts a search query from the alt text."""
-    return img_tag.get('alt', '').strip()
-
+# --- Image Engine & Helpers (Unchanged from last working version) ---
 def fix_broken_images_only(html_content: str) -> str:
-    """
-    Finds <img> tags with empty or missing 'src' attributes and fills them.
-    It TRUSTS and DOES NOT OVERWRITE existing src URLs from the AI.
-    """
     if not html_content: return ""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         images = soup.find_all('img')
-        
         for img in images:
             current_src = img.get('src', '').strip()
-            
-            # --- THIS IS THE CRITICAL CHANGE ---
-            # If the src is empty or missing, we intervene. Otherwise, we trust the AI.
             if not current_src:
-                context_query = extract_image_context(img)
-                image_url = ""
-                
-                if context_query:
-                    keywords = re.sub(r'[^a-zA-Z0-9\s,]', '', context_query).replace(' ', ',')
-                    image_url = f"https://source.unsplash.com/random/1200x800/?{keywords}"
-                else:
-                    image_url = random.choice(get_guaranteed_fallback_images())
-                
-                img['src'] = image_url
-
-            # Ensure all images have good attributes regardless
-            if not img.get('alt'): img['alt'] = "High-quality decorative image"
-            img['loading'] = 'lazy'
-
+                context_query = img.get('alt', '').strip()
+                keywords = re.sub(r'[^a-zA-Z0-9\s,]', '', context_query).replace(' ', ',')
+                img['src'] = f"https://source.unsplash.com/random/1200x800/?{keywords}" if keywords else "https://images.unsplash.com/photo-1557683316-973673baf926?w=1260&q=80"
         return str(soup)
-    except Exception as e:
-        print(f"Error in fix_broken_images_only: {e}")
-        return html_content
+    except Exception: return html_content
 
-# --- THE NEW HIGH-QUALITY SUPER-PROMPT (Updated Image Instructions) ---
-SUPERCHARGED_DESIGN_BRIEF = (
-    "You are 'Aether,' an award-winning digital artist and frontend developer. Your mission is to create a single, standalone HTML file that is a piece of art.\n\n"
-    "**AETHER'S DESIGN MANIFESTO (MANDATORY):**\n\n"
-    "1.  **CSS MASTERY:** Write rich, detailed custom CSS in the `<style>` tag. Define a sophisticated color palette using CSS variables (`:root { --primary: #...; }`) and import two complementary fonts from Google Fonts (e.g., a serif for headings, a sans-serif for body).\n"
-    "2.  **ARTISTIC LAYOUT:** Create unique, interesting layouts for each section using CSS Grid and Flexbox. Use generous whitespace to create a clean, high-end feel.\n"
-    "3.  **INTERACTIVE ELEGANCE:** The page must feel alive. You MUST include JavaScript for 'animate on scroll' effects using the `IntersectionObserver` API. All interactive elements MUST have smooth `transition` effects and engaging `hover` states.\n"
-    "4.  **IMAGE INTEGRATION (CRITICAL):**\n"
-    "    - **PRIORITY 1: FIND A REAL URL.** You are strongly encouraged to find and use specific, high-quality image URLs directly from services like `images.unsplash.com` or `images.pexels.com`. This is the best way to get a great result.\n"
-    "    - **PRIORITY 2: PROVIDE CONTEXT.** If you absolutely cannot find a specific URL, you MUST still include the `<img>` tag with an empty `src=\"\"` and a highly descriptive `alt` attribute. The system will fix any empty `src` attributes.\n"
-    "    - **Example of a perfect image tag:** `<img src=\"https://images.unsplash.com/photo-1504711434969-e33886168f5c\" alt=\"A journalist's desk with a vintage typewriter and a newspaper\">`\n"
-    "    - **Example of an acceptable fallback:** `<img src=\"\" alt=\"A team of developers collaborating around a whiteboard\">`\n\n"
+def isolate_html_document(raw_text: str) -> str:
+    doctype_start = raw_text.lower().find('<!doctype html')
+    return raw_text[doctype_start:] if doctype_start != -1 else raw_text # Return raw text if no doctype
+
+def extract_assets(html_content: str) -> tuple:
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        css = "\n".join(style.string or '' for style in soup.find_all('style'))
+        js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
+        body_tag = soup.find('body')
+        body_content = ''.join(str(c) for c in body_tag.contents) if body_tag else ''
+        return body_content, css.strip(), js.strip()
+    except Exception: return html_content, "", ""
+
+# --- System Prompts (Completely Re-architected) ---
+
+# Prompt for the initial, high-quality build
+AETHER_INITIAL_BUILD_PROMPT = (
+    "You are 'Aether,' an award-winning digital artist and frontend developer. Your mission is to create a single, standalone HTML file that is a piece of art. It must be aesthetically breathtaking, functional, and perfectly tailored to the user's prompt.\n\n"
+    "**DESIGN MANIFESTO:**\n"
+    "1.  **CSS MASTERY:** Write rich, detailed custom CSS in the `<style>` tag. Define a sophisticated color palette using CSS variables (`:root { --primary: #...; }`) and import two complementary fonts from Google Fonts.\n"
+    "2.  **ARTISTIC LAYOUT:** Create unique, interesting layouts for each section using CSS Grid and Flexbox. Use generous whitespace.\n"
+    "3.  **INTERACTIVE ELEGANCE:** The page MUST feel alive. Use JavaScript for 'animate on scroll' effects via the `IntersectionObserver` API.\n"
+    "4.  **IMAGE INTEGRATION (CRITICAL):** You are strongly encouraged to find and use specific, high-quality image URLs directly from services like `images.unsplash.com` or `images.pexels.com`. If you cannot, leave `src=\"\"` and write a highly descriptive `alt` attribute.\n\n"
     "**TECHNICAL DIRECTIVES:**\n"
     "- Your response is ONE single HTML file. Start immediately with `<!DOCTYPE html>`."
 )
 
-# --- AI Core & Helper Functions (Unchanged) ---
-def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
-    model_id = MODEL_MAPPING_TOGETHER.get(model_key)
-    if not model_id: raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
-    response = together_client.chat.completions.create(model=model_id, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], temperature=0.3, max_tokens=8192)
-    return response.choices[0].message.content or ""
-def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str):
-    if not GOOGLE_API_KEY: raise HTTPException(status_code=503, detail="Google API key not configured.")
-    model = genai.GenerativeModel(model_id_str)
-    full_prompt = f"{system_prompt}\n\nUSER PROMPT: {user_prompt}"
-    generation_config = genai.types.GenerationConfig(temperature=0.3)
-    safety_settings = {'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'}
-    response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
-    return response.text
-def generate_code(system_prompt: str, user_prompt: str, model_key: str):
+# Prompt for generating precise diff patches, inspired by Deepsite
+DEEPSITE_FOLLOW_UP_PROMPT = (
+    "You are an expert web developer modifying an existing HTML file. You MUST output ONLY the changes required using the following SEARCH/REPLACE block format. Do NOT output the entire file. Do NOT include explanations or markdown.\n"
+    "**FORMAT RULES:**\n"
+    "1. Start each change with `<<<<<<< SEARCH` on its own line.\n"
+    "2. Provide the exact lines from the current code that need to be replaced.\n"
+    "3. Use `=======` on its own line to separate the search block from the replacement.\n"
+    "4. Provide the new lines that should replace the original lines.\n"
+    "5. End each change with `>>>>>>> REPLACE` on its own line.\n"
+    "6. To insert code, provide the line *before* the insertion point in the SEARCH block and include that line plus the new lines in the REPLACE block.\n"
+    "7. To delete code, provide the lines to delete in the SEARCH block and leave the REPLACE block empty.\n"
+    "8. IMPORTANT: The SEARCH block must *exactly* match the current code, including indentation and whitespace.\n\n"
+    "**EXAMPLE:**\n"
+    "<<<<<<< SEARCH\n"
+    "    <h1>Old Title</h1>\n"
+    "=======\n"
+    "    <h1>A New, Better Title</h1>\n"
+    ">>>>>>> REPLACE"
+)
+
+# --- AI Core & Patching Logic ---
+
+def generate_code(system_prompt: str, user_prompt: str, model_key: str, temperature: float = 0.3):
+    model_id = MODEL_MAPPING_TOGETHER.get(model_key, "zai-org/GLM-4.5-Air-FP8")
     try:
-        if model_key == "gemini-2.5-flash-lite": return generate_with_google(system_prompt, user_prompt, model_key)
-        else: return generate_with_together(system_prompt, user_prompt, model_key)
+        response = together_client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=temperature,
+            max_tokens=8192
+        )
+        return response.choices[0].message.content or ""
     except Exception as e:
         print(f"Error calling AI model {model_key}: {e}")
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
 
+def apply_diff_patch(original_html: str, patch_text: str) -> str:
+    """Applies a SEARCH/REPLACE patch to the original HTML."""
+    if '<<<<<<< SEARCH' not in patch_text:
+        # The AI failed to follow instructions, return original content
+        print("Warning: AI did not return a valid patch. Returning original HTML.")
+        return original_html
+        
+    # Split the patch text into individual patch blocks
+    patches = re.split(r'<<<<<<< SEARCH', patch_text)
+    modified_html = original_html
+    
+    for patch in patches:
+        if '=======' not in patch or '>>>>>>> REPLACE' not in patch:
+            continue
+        
+        parts = re.split(r'=======\n|>>>>>>> REPLACE', patch)
+        search_block = parts[0].strip('\n')
+        replace_block = parts[1].strip('\n')
+        
+        # Use count=1 to only replace the first occurrence found
+        modified_html = modified_html.replace(search_block, replace_block, 1)
+        
+    return modified_html
+
+# --- FastAPI App ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-def prefix_css_rules(css_content: str, container_id: str) -> str:
-    if not container_id: return css_content
-    def prefixer(match):
-        selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
-        return ", ".join(selectors) + match.group(2)
-    css_content = re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, css_content)
-    css_content = re.sub(r'(@media[^{]*{\s*)(.*?)(\s*})', lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3), css_content, flags=re.DOTALL)
-    return css_content
-def clean_chatter_and_invalid_tags(soup_or_tag):
-    if not hasattr(soup_or_tag, 'children'): return
-    nodes_to_remove = [child for child in list(soup_or_tag.children) if (isinstance(child, NavigableString) and child.string.strip() and soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main']) or (hasattr(child, 'name') and child.name in ['think', 'thought', 'explanation'])]
-    for node in nodes_to_remove: node.decompose()
-    for child in soup_or_tag.children:
-        if hasattr(child, 'name'): clean_chatter_and_invalid_tags(child)
-def isolate_html_document(raw_text: str) -> str:
-    doctype_start = raw_text.lower().find('<!doctype html')
-    return raw_text[doctype_start:] if doctype_start != -1 else ""
-def clean_html_snippet(text: str) -> str:
-    soup = BeautifulSoup(text, 'html.parser')
-    clean_chatter_and_invalid_tags(soup)
-    if soup.body: return ''.join(str(c) for c in soup.body.contents)
-    return str(soup)
-def extract_assets(html_content: str, container_id: str) -> tuple:
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-        css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
-        prefixed_css = prefix_css_rules(css_content, container_id)
-        js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string)
-        body_tag = soup.find('body')
-        if body_tag:
-            clean_chatter_and_invalid_tags(body_tag)
-            container_in_body = body_tag.find(id=container_id)
-            if container_in_body and container_in_body.parent == body_tag:
-                 body_content = ''.join(str(c) for c in container_in_body.contents)
-            else: body_content = ''.join(str(c) for c in body_tag.contents)
-        else: body_content = ''
-        return body_content, prefixed_css, js.strip()
-    except Exception as e:
-        print(f"Error extracting assets: {e}")
-        return html_content, "", ""
 
 @app.get("/", response_class=HTMLResponse)
-async def root(): return "<h1>NeuroArti Pro Builder API is operational with High-Quality Design Engine.</h1>"
+async def root(): return "<h1>NeuroArti Pro Builder API is operational with Deepsite-inspired patching.</h1>"
 
-# --- API Endpoints (Using the new Image Assistant) ---
+# --- API Endpoints (Re-architected) ---
+
 @app.post("/build")
 def create_build(request: BuildRequest):
-    raw_code = generate_code(SUPERCHARGED_DESIGN_BRIEF, request.prompt, request.model)
+    """Generates the initial full HTML page."""
+    raw_code = generate_code(AETHER_INITIAL_BUILD_PROMPT, request.prompt, request.model, temperature=0.3)
     html_document = isolate_html_document(raw_code)
+    
     if html_document:
+        # Only fix images with empty src attributes
         fixed_html_document = fix_broken_images_only(html_document)
-        container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
-        body_html, css, js = extract_assets(fixed_html_document, container_id)
-        return {"html": body_html, "css": css, "js": js, "container_id": container_id}
-    raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
-
-@app.post("/update")
-def update_build(request: UpdateRequest):
-    full_html_for_ai = f"""<!DOCTYPE html><html><head><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div></body><script>{request.js}</script></html>"""
-    user_prompt = f"USER REQUEST: '{request.prompt}'\n\nCURRENT WEBSITE CODE:\n{full_html_for_ai}"
-    raw_code = generate_code(SUPERCHARGED_DESIGN_BRIEF, user_prompt, request.model)
-    html_document = isolate_html_document(raw_code)
-    if html_document:
-        fixed_html_document = fix_broken_images_only(html_document)
-        body_html, css, js = extract_assets(fixed_html_document, request.container_id)
-        return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
-    raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
-
-@app.post("/edit-snippet")
-def create_edit_snippet(request: EditSnippetRequest):
-    user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
-    modified_snippet_raw = generate_code(SUPERCHARGED_DESIGN_BRIEF, user_prompt, request.model)
-    fixed_snippet = fix_broken_images_only(modified_snippet_raw)
-    cleaned_snippet = clean_html_snippet(fixed_snippet)
-    if cleaned_snippet and '<' in cleaned_snippet:
-        return {"snippet": cleaned_snippet}
-    return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
-
-@app.post("/patch-html")
-def patch_html(request: PatchRequest):
-    try:
-        full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
-        soup = BeautifulSoup(full_html_doc, 'html.parser')
-        element_to_modify = soup.select_one(request.parent_selector)
-        if not element_to_modify:
-            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
-        if not request.new_parent_snippet or not request.new_parent_snippet.strip():
-            raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-        fixed_snippet = fix_broken_images_only(request.new_parent_snippet)
-        new_snippet_soup = BeautifulSoup(fixed_snippet, 'html.parser')
-        new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
-        if not new_contents:
-            raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
+        body, css, js = extract_assets(fixed_html_document)
+        return {"html": body, "css": css, "js": js}
         
-        element_to_modify.replace_with(*new_contents)
-            
-        final_container_div = soup.select_one(f'#{request.container_id}')
-        body_html = ''.join(str(c) for c in (final_container_div.contents if final_container_div else soup.body.contents))
-        return {"html": body_html, "css": request.css, "js": request.js}
-    except Exception as e:
-        print(f"Patching error: {e}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
+    raise HTTPException(status_code=500, detail="AI failed to generate initial build.")
 
+@app.post("/diff-and-patch")
+def diff_and_patch(request: DiffAndPatchRequest):
+    """Generates a patch and applies it to the current HTML."""
+    # Create the user prompt for the patching AI
+    user_prompt = f"Apply the following change to the HTML code below: {request.prompt}\n\n```html\n{request.html}\n```"
+    
+    # Generate the patch text
+    patch_text = generate_code(DEEPSITE_FOLLOW_UP_PROMPT, user_prompt, request.model, temperature=0.0) # Low temp for precision
+    
+    if not patch_text:
+        raise HTTPException(status_code=500, detail="AI failed to generate a patch.")
+
+    # Apply the patch to the original HTML
+    patched_html = apply_diff_patch(request.html, patch_text)
+    
+    # Extract assets from the newly patched full HTML document
+    # Note: We need a full structure for the asset extractor to work
+    full_patched_doc = f"<!DOCTYPE html><html><body>{patched_html}</body></html>"
+    fixed_patched_doc = fix_broken_images_only(full_patched_doc) # Fix images that may have been added
+    
+    body, css, js = extract_assets(fixed_patched_doc)
+    return {"html": body, "css": css, "js": js}
+
+# Uvicorn runner
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
