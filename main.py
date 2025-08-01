@@ -22,7 +22,7 @@ from core.utils import (
     apply_diff_patch,
     isolate_and_clean_html,
     extract_assets,
-    extract_first_html_element # <-- Import the new function
+    extract_first_html_element # <-- It calls the right function
 )
 load_dotenv()
 
