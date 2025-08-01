@@ -1,7 +1,7 @@
 # core/complex_element_service.py
 from core.ai_services import generate_code
 from core.prompts import SYSTEM_PROMPT_REWRITE_ELEMENT
-from core.utils import extract_first_html_element
+from core.utils import extract_first_html_element, sanitize_rewritten_element
 
 async def rewrite_complex_element(prompt: str, selected_element_html: str, model: str) -> str:
     """
@@ -21,9 +21,13 @@ async def rewrite_complex_element(prompt: str, selected_element_html: str, model
         model
     )
     
+    # Clean and extract the final HTML.
     rewritten_element_html = extract_first_html_element(ai_response_text)
+
+    # Sanitize the result to remove any forbidden tags.
+    sanitized_html = sanitize_rewritten_element(rewritten_element_html)
     
-    if not rewritten_element_html.strip():
+    if not sanitized_html.strip():
         raise Exception("AI returned an empty or invalid element for complex rewrite.")
         
-    return rewritten_element_html
+    return sanitized_html
