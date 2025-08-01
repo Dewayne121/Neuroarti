@@ -13,7 +13,6 @@ from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_SURGICAL_EDIT,
     SEARCH_START
 )
 from core.models import MODELS
@@ -39,12 +38,7 @@ class UpdateRequest(BaseModel):
     css: str
     js: str
     container_id: str
-
-class RewriteRequest(BaseModel):
-    prompt: str
-    model: str
-    html: str
-    selectedElementHtml: str
+    selectedElementHtml: str | None = None # This is now optional for the unified endpoint
 
 app = FastAPI()
 
@@ -76,7 +70,7 @@ async def build_or_full_update(request: Request, body: BuildRequest):
     return JSONResponse(content={"ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id})
 
 @app.put("/api/ask-ai")
-async def diff_patch_update(request: Request, body: UpdateRequest):
+async def unified_diff_patch_update(request: Request, body: UpdateRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
@@ -84,76 +78,41 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
         raise HTTPException(status_code=400, detail="HTML content is required.")
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
+
+    # --- Inspired by deepsite-v2: Construct a context-rich prompt ---
+    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\n"
+
+    if body.selectedElementHtml:
+        # If an element is selected, give the AI forceful, specific instructions
+        user_prompt += (
+            "CRITICAL INSTRUCTION: The user has selected a specific element to modify. "
+            "You MUST confine your changes to ONLY this element and its children. "
+            f"Here is the selected element:\n```html\n{body.selectedElementHtml}\n```\n\n"
+            f"The user's request for this specific element is: '{body.prompt}'"
+        )
+    else:
+        # If no element is selected, it's a global update request
+        user_prompt += f"My request for a global page update is: '{body.prompt}'"
+
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
+    
+    soup = BeautifulSoup(body.html, 'html.parser')
+    original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+    
     if not patch_instructions or SEARCH_START not in patch_instructions:
-        soup = BeautifulSoup(body.html, 'html.parser')
-        original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+        print("Warning: AI returned an invalid or empty patch. No changes applied.")
         return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
+    
     updated_full_html = apply_diff_patch(body.html, patch_instructions)
     updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
-    return JSONResponse(content={"ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id})
-
-@app.put("/api/rewrite-element")
-async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
-    ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
-    if not body.html or not body.selectedElementHtml:
-        raise HTTPException(status_code=400, detail="Full HTML and a selected element are required.")
     
-    try:
-        # --- Definitive "Surgical Marker" Method ---
-        
-        # 1. "Clean" the selected element HTML by removing temporary frontend attributes.
-        selected_soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
-        selected_tag = selected_soup.find(lambda tag: isinstance(tag, Tag))
-        if not selected_tag:
-            raise HTTPException(status_code=400, detail="Invalid selected element HTML.")
-        
-        # Remove any temporary attributes the frontend might have added for highlighting.
-        for attr in list(selected_tag.attrs.keys()):
-            if attr.startswith('data-neuro-'):
-                del selected_tag[attr]
-        
-        clean_selected_html = str(selected_tag)
-
-        # 2. Find the clean element in the full document.
-        full_soup = BeautifulSoup(body.html, 'html.parser')
-        target_element = full_soup.find(lambda tag: str(tag) == clean_selected_html)
-
-        if not target_element:
-            # Add a more descriptive error message for debugging.
-            raise Exception("The selected element could not be found in the full HTML document. This might happen if the page was modified after selection.")
-
-        # 3. Add the unique marker for the AI.
-        target_element['data-neuro-edit-target'] = 'true'
-        marked_full_html = str(full_soup)
-
-        user_prompt_for_ai = (
-            f"**Full HTML Document:**\n```html\n{marked_full_html}\n```\n\n"
-            f"**User's Instruction:**\n'{body.prompt}'\n\n"
-        )
-
-        ai_response_text = await generate_code(
-            SYSTEM_PROMPT_SURGICAL_EDIT,
-            user_prompt_for_ai,
-            body.model
-        )
-
-        updated_full_html = isolate_and_clean_html(ai_response_text)
-        if not updated_full_html:
-            raise Exception("AI returned an empty or invalid full HTML document.")
-
-        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id")
-
-        return JSONResponse(content={
-            "ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js
-        })
-
-    except Exception as e:
-        print(f"Error during surgical element rewrite: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(content={
+        "ok": True, 
+        "html": updated_body_content, 
+        "css": updated_css, 
+        "js": updated_js, 
+        "container_id": body.container_id
+    })
 
 if __name__ == "__main__":
     import uvicorn
