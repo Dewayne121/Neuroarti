@@ -10,7 +10,7 @@ from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
 
-# --- Pydantic Models (from the more advanced version) ---
+# --- Pydantic Models (Kept from modern version) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -36,7 +36,7 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration (from the more advanced version) ---
+# --- Configuration (Kept from modern version) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
@@ -54,17 +54,17 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- THE KEY FIX: A Stronger, Clearer Ruleset (The successful strategy from the old version, but enhanced) ---
+# --- THE DEFINITIVE RULESET (Inspired by what worked in the old version) ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
     "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
     "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background.\n"
-    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this, you MUST ONLY use the following two services. NO OTHER placeholder services (like placehold.co, picsum.photos, etc.) are allowed.\n"
+    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this, you MUST ONLY use the following two services. NO OTHER placeholder services are allowed.\n"
     "    - **For all thematic, background, or object images:** Use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Example: `<img src=\"https://source.unsplash.com/random/800x600?technology,office\">`. Use creative, descriptive keywords relevant to the user's prompt.\n"
     "    - **For all user avatars or profile photos:** Use the `randomuser.me/api/portraits/` service. You must include the gender (`men`/`women`) and a number (0-99). Example: `<img src=\"https://randomuser.me/api/portraits/women/45.jpg\">`."
 )
 
-# --- Supercharged System Prompts (Using the new, strong ruleset) ---
+# --- Supercharged System Prompts (Using the definitive ruleset) ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer creating a stunning, complete webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
@@ -81,7 +81,7 @@ GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     f"{MANDATORY_RULESET}"
 )
 
-# --- Helper Functions (Proven and reliable) ---
+# --- Helper Functions (Cleaned up, no more image fixing) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -135,7 +135,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- AI Core Functions ---
+# --- AI Core Functions (Kept from modern version) ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
     model_id = MODEL_MAPPING_TOGETHER.get(model_key)
     if not model_id:
@@ -154,7 +154,7 @@ def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str
 
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
     try:
-        if "gemini" in model_key:
+        if model_key == "gemini-2.5-flash-lite":
             return generate_with_google(system_prompt, user_prompt, model_key)
         else:
             return generate_with_together(system_prompt, user_prompt, model_key)
@@ -173,10 +173,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 async def root(): 
     return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 
-# --- API Endpoints ---
+# --- API Endpoints (Simplified to trust the AI) ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
-    if "gemini" in request.model:
+    if request.model == "gemini-2.5-flash-lite":
         system_prompt = GEMINI_2_5_LITE_SUPERCHARGED_PROMPT
     elif request.model == "deepseek-r1":
         system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
@@ -229,10 +229,8 @@ async def create_edit_snippet(request: EditSnippetRequest):
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
-        # Note: The 'container_id' is now sent in the PatchRequest
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
-        
         element_to_modify = soup.select_one(request.parent_selector)
         if not element_to_modify:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
@@ -243,8 +241,9 @@ async def patch_html(request: PatchRequest):
         
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-            
+        
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
+        
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
@@ -260,7 +259,6 @@ async def patch_html(request: PatchRequest):
             raise HTTPException(status_code=500, detail="Container element was lost after patching.")
         
         body_html = ''.join(str(c) for c in final_container_div.contents)
-        # We return the css/js so the frontend state remains consistent
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
