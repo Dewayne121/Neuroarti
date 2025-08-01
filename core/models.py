@@ -1,39 +1,27 @@
 # core/models.py
 
-PROVIDERS = {
-    "fireworks-ai": {
-        "name": "Fireworks AI", "max_tokens": 131_000, "id": "fireworks-ai",
+# This dictionary now defines all models, their display names, the API to use,
+# and the exact ID for that API. This is the single source of truth.
+MODELS = {
+    "glm-4.5-air": {
+        "label": "GLM 4.5 Air",
+        "api_provider": "together",
+        "api_id": "zai-org/GLM-4.5-Air-FP8", # The specific ID for Together.ai
     },
-    "nebius": {
-        "name": "Nebius AI Studio", "max_tokens": 131_000, "id": "nebius",
+    "gemini-2.5-flash-lite": {
+        "label": "Gemini 2.5 Lite",
+        "api_provider": "google",
+        "api_id": "gemini-1.5-flash-latest", # The specific ID for Google's API
     },
-    "sambanova": {
-        "name": "SambaNova", "max_tokens": 32_000, "id": "sambanova",
-    },
-    "novita": {
-        "name": "NovitaAI", "max_tokens": 16_000, "id": "novita",
-    },
-    "hyperbolic": {
-        "name": "Hyperbolic", "max_tokens": 131_000, "id": "hyperbolic",
-    },
-    "together": {
-        "name": "Together AI", "max_tokens": 128_000, "id": "together",
-    },
+    "deepseek-r1": {
+        "label": "DeepSeek R1",
+        "api_provider": "together",
+        "api_id": "deepseek-ai/DeepSeek-R1-0528-tput", # The specific ID for Together.ai
+    }
 }
 
-MODELS = [
-    {
-        "value": "deepseek-ai/DeepSeek-V3-0324",
-        "label": "DeepSeek V3 O324",
-        "providers": ["fireworks-ai", "nebius", "sambanova", "novita", "hyperbolic"],
-        "autoProvider": "novita",
-    },
-    {
-        "value": "deepseek-ai/DeepSeek-R1-0528",
-        "label": "DeepSeek R1 0528",
-        "providers": ["fireworks-ai", "novita", "hyperbolic", "nebius", "together", "sambanova"],
-        "autoProvider": "novita",
-        "isNew": True,
-        "isThinker": True,
-    },
-]
+# The providers dictionary is now simpler as the model defines which one to use.
+PROVIDERS = {
+    "together": {"name": "Together AI"},
+    "google": {"name": "Google AI"}
+}
