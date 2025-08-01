@@ -55,7 +55,7 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- FIX: The Mandatory Ruleset for High-Quality Output (IMPROVED) ---
+# --- Mandatory Ruleset (Unchanged, but now programmatically enforced) ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
     "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
@@ -65,27 +65,48 @@ MANDATORY_RULESET = (
     "    - **For all user avatars or profile photos:** Use the `randomuser.me/api/portraits/` service. You must include the gender (`men`/`women`) and a number (0-99). Example: `<img src=\"https://randomuser.me/api/portraits/women/45.jpg\">`."
 )
 
-
-# --- Supercharged System Prompts (Now with the Mandatory Ruleset) ---
+# --- Supercharged System Prompts (Unchanged) ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer creating a stunning, complete webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
-
 DEEPSEEK_SUPERCHARGED_PROMPT = (
     "You are a top-tier frontend architect AI writing a production-ready, single-file HTML document. "
     "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
-
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     "You are a world-class AI developer writing a clean, modern, single-file HTML webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
 
-# --- Helper Functions (unchanged) ---
+# --- NEW HELPER: Image Source Guardrail ---
+def fix_image_sources(html_content: str) -> str:
+    """
+    Parses HTML and replaces invalid image placeholders with valid ones from Unsplash.
+    This acts as a guardrail against the AI failing to follow image rules.
+    """
+    if not html_content:
+        return ""
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        images = soup.find_all('img')
+        for img in images:
+            src = img.get('src', '')
+            # Check if the src is empty or is not from one of the allowed domains
+            if not src or ('unsplash.com' not in src and 'randomuser.me' not in src):
+                # Replace with a default, guaranteed-to-work Unsplash URL
+                img['src'] = 'https://source.unsplash.com/random/800x600?abstract'
+                # Optionally log that a fix was made
+                # print(f"Fixed invalid image source: '{src}'")
+        return str(soup)
+    except Exception as e:
+        print(f"Error fixing image sources: {e}")
+        return html_content # Return original content if parsing fails
+
+# --- Helper Functions (Existing, unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -169,7 +190,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/", response_class=HTMLResponse)
 async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 
-# --- API Endpoints (Unchanged) ---
+# --- API Endpoints (Updated to use the image fixer) ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
     if request.model == "gemini-2.5-flash-lite":
@@ -178,12 +199,18 @@ async def create_build(request: BuildRequest):
         system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
     else:
         system_prompt = GLM_SUPERCHARGED_PROMPT
+        
     raw_code = generate_code(system_prompt, request.prompt, request.model)
     html_document = isolate_html_document(raw_code)
+    
     if html_document:
+        # **KEY CHANGE**: Apply the image fixing guardrail
+        fixed_html_document = fix_image_sources(html_document)
+        
         container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
-        body_html, css, js = extract_assets(html_document, container_id)
+        body_html, css, js = extract_assets(fixed_html_document, container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
+        
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
 @app.post("/update")
@@ -194,11 +221,17 @@ async def update_build(request: UpdateRequest):
     )
     full_html_for_ai = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div></body><script>{request.js}</script></html>"""
     user_prompt = f"USER REQUEST: '{request.prompt}'\n\nCURRENT WEBSITE CODE:\n{full_html_for_ai}"
+    
     raw_code = generate_code(system_prompt, user_prompt, request.model)
     html_document = isolate_html_document(raw_code)
+
     if html_document:
-        body_html, css, js = extract_assets(html_document, request.container_id)
+        # **KEY CHANGE**: Apply the image fixing guardrail
+        fixed_html_document = fix_image_sources(html_document)
+        
+        body_html, css, js = extract_assets(fixed_html_document, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
+        
     raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
 
 @app.post("/edit-snippet")
@@ -210,11 +243,17 @@ async def create_edit_snippet(request: EditSnippetRequest):
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, request.model)
-    cleaned_snippet = clean_html_snippet(modified_snippet_raw)
+    
+    # **KEY CHANGE**: Also apply the image fixer to snippets
+    fixed_snippet = fix_image_sources(modified_snippet_raw)
+    
+    cleaned_snippet = clean_html_snippet(fixed_snippet)
+    
     if cleaned_snippet and '<' in cleaned_snippet:
         return {"snippet": cleaned_snippet}
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
+# --- Patch and Uvicorn sections remain unchanged ---
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
@@ -249,7 +288,6 @@ async def patch_html(request: PatchRequest):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
-# --- Uvicorn runner (Unchanged) ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
