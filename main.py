@@ -45,7 +45,6 @@ class RewriteRequest(BaseModel):
     model: str
     html: str
     selectedElementHtml: str
-    container_id: str  # Added this field
 
 app = FastAPI()
 
@@ -104,39 +103,30 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         raise HTTPException(status_code=400, detail="Full HTML and a selected element are required.")
     
     try:
-        # Parse both the full HTML and the selected element
-        full_soup = BeautifulSoup(body.html, 'html.parser')
+        # --- Definitive "Surgical Marker" Method ---
+        
+        # 1. "Clean" the selected element HTML by removing temporary frontend attributes.
         selected_soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
+        selected_tag = selected_soup.find(lambda tag: isinstance(tag, Tag))
+        if not selected_tag:
+            raise HTTPException(status_code=400, detail="Invalid selected element HTML.")
         
-        selected_element_parsed = selected_soup.find()
-        if not selected_element_parsed:
-            raise Exception("Could not parse the selected element HTML.")
+        # Remove any temporary attributes the frontend might have added for highlighting.
+        for attr in list(selected_tag.attrs.keys()):
+            if attr.startswith('data-neuro-'):
+                del selected_tag[attr]
         
-        target_element = None
-        
-        # Strategy 1: Try exact string match first (fastest and most precise)
-        possible_targets = full_soup.find_all(lambda tag: str(tag) == body.selectedElementHtml)
-        if possible_targets:
-            target_element = possible_targets[0]
+        clean_selected_html = str(selected_tag)
 
-        # Strategy 2: If exact match fails, try a more semantic match
+        # 2. Find the clean element in the full document.
+        full_soup = BeautifulSoup(body.html, 'html.parser')
+        target_element = full_soup.find(lambda tag: str(tag) == clean_selected_html)
+
         if not target_element:
-            tag_name = selected_element_parsed.name
-            element_text = selected_element_parsed.get_text(strip=True)
-            element_attrs = selected_element_parsed.attrs
-            
-            candidates = full_soup.find_all(tag_name)
-            for candidate in candidates:
-                if candidate.get_text(strip=True) == element_text:
-                    attrs_match = all(candidate.get(key) == value for key, value in element_attrs.items())
-                    if attrs_match:
-                        target_element = candidate
-                        break
-        
-        if not target_element:
+            # Add a more descriptive error message for debugging.
             raise Exception("The selected element could not be found in the full HTML document. This might happen if the page was modified after selection.")
 
-        # Mark the target element for surgical editing
+        # 3. Add the unique marker for the AI.
         target_element['data-neuro-edit-target'] = 'true'
         marked_full_html = str(full_soup)
 
@@ -155,14 +145,10 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         if not updated_full_html:
             raise Exception("AI returned an empty or invalid full HTML document.")
 
-        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
+        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id")
 
         return JSONResponse(content={
-            "ok": True, 
-            "html": updated_body_content, 
-            "css": updated_css, 
-            "js": updated_js,
-            "container_id": body.container_id
+            "ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js
         })
 
     except Exception as e:
@@ -171,4 +157,4 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
