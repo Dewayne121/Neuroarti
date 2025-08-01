@@ -10,7 +10,7 @@ import re
 from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 
-# --- Pydantic Models (Unchanged) ---
+# --- Pydantic Models ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -36,7 +36,7 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration (Unchanged) ---
+# --- Configuration ---
 API_KEY = os.environ.get("TOGETHER_API_KEY")
 if not API_KEY:
     raise ValueError("API Key not found. Please set TOGETHER_API_KEY.")
@@ -48,7 +48,7 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Supercharged Prompts (Unchanged) ---
+# --- Supercharged System Prompts ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
     "Your response MUST BE ONLY the full, valid HTML code. Do not include any explanations, markdown like ```html, or comments. Your response must start immediately with `<!DOCTYPE html>`."
@@ -96,7 +96,8 @@ DEEPSEEK_SUPERCHARGED_PROMPT = (
     "\n    - Ensure accessibility basics: `alt` attributes for all `<img>` tags, `aria-label` for icon buttons, etc."
 )
 
-# --- Helper Functions (Unchanged) ---
+
+# --- Helper Functions ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -150,7 +151,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- AI Core Functions (Unchanged) ---
+# --- AI Core Functions ---
 def generate_code(system_prompt: str, user_prompt: str, model_id: str):
     try:
         response = client.chat.completions.create(
@@ -163,7 +164,7 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str):
         print(f"Error calling AI model {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"AI service error: {e}")
 
-# --- FastAPI App (Unchanged) ---
+# --- FastAPI App ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -197,7 +198,6 @@ async def create_build(request: BuildRequest):
 async def update_build(request: UpdateRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING.get("glm-4.5-air"))
     
-    # KEY CHANGE: Enhance the update prompt
     system_prompt = (
         "You are an expert web developer tasked with modifying an existing webpage. "
         "You will receive the complete HTML, CSS, and JS of the current page, along with a user's request for a high-level change. "
@@ -238,13 +238,13 @@ async def update_build(request: UpdateRequest):
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     
-    # KEY CHANGE: Enhance the edit-snippet prompt
     system_prompt = (
         "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
         "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
         "You MUST preserve the surrounding parent and sibling elements. Adhere to the existing Tailwind CSS classes and design patterns. "
         "**IMPORTANT:** Ensure your changes are responsive and do not break the layout on mobile devices. Use responsive prefixes like `sm:` and `md:` if you add new layout-related classes. "
-        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARG"
+        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARGET -->` comment removed. "
+        "NO explanations, NO markdown. Your entire response must be the updated HTML block."
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
@@ -255,43 +255,57 @@ async def create_edit_snippet(request: EditSnippetRequest):
     
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
-# Unchanged /patch-html endpoint...
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
+        # Reconstruct the document structure for parsing
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
 
+        # Find the parent element to be modified
         parent_element = soup.select_one(request.parent_selector)
+        
+        is_top_level_edit = False
         if not parent_element:
-            if request.parent_selector == f"body > #{request.container_id}":
-                 # This means the user is editing a top-level element, and its parent is the container itself.
-                 parent_element = soup.select_one(f"#{request.container_id}")
-            if not parent_element:
-                 raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
+            # If the original selector fails, it's likely a top-level edit.
+            # We then target the container itself as the element to modify its contents.
+            element_to_modify = soup.select_one(f"#{request.container_id}")
+            if element_to_modify:
+                is_top_level_edit = True
+            else:
+                 # This would be an unrecoverable error
+                 raise HTTPException(status_code=404, detail=f"Could not find container with selector '#{request.container_id}' to perform top-level edit.")
+        else:
+            element_to_modify = parent_element
         
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
 
+        # Parse the AI's response
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
-        
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet from AI response.")
-        
-        # This handles both cases: replacing a child within a parent, or replacing the entire content of the container
-        if request.parent_selector == f"body > #{request.container_id}":
-             parent_element.clear()
-             for content in new_contents:
-                 parent_element.append(content)
-        else:
-             parent_element.replace_with(*new_contents)
 
-        container_div = soup.select_one(f'#{request.container_id}')
-        if not container_div:
+        # Apply the correct patching strategy based on whether it's a top-level edit
+        if is_top_level_edit:
+            # For top-level edits, clear the container and append the new content inside it.
+            # This preserves the container div itself.
+            element_to_modify.clear()
+            for content_node in new_contents:
+                element_to_modify.append(content_node)
+        else:
+            # For nested elements, replace the entire parent element as before.
+            element_to_modify.replace_with(*new_contents)
+
+        # Re-select the container to extract its final inner HTML
+        final_container_div = soup.select_one(f'#{request.container_id}')
+        if not final_container_div:
+            # This is our safety check. If it fails, something went wrong.
             raise HTTPException(status_code=500, detail="Container element was lost after patching HTML.")
 
-        body_html = ''.join(str(c) for c in container_div.contents)
+        # Return the inner HTML of the preserved container
+        body_html = ''.join(str(c) for c in final_container_div.contents)
         
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
@@ -300,7 +314,7 @@ async def patch_html(request: PatchRequest):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
-# --- Uvicorn runner (Unchanged) ---
+# --- Uvicorn runner ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
