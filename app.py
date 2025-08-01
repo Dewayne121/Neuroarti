@@ -84,9 +84,12 @@ SYSTEM_PROMPT_UPDATE = (
     f"{MANDATORY_RULESET_V2}"
 )
 
+# MODIFICATION: Made the prompt for snippet editing even stricter to prevent errors.
 SYSTEM_PROMPT_EDIT_SNIPPET = (
-    "You are a surgical HTML modification tool. Your task is to modify ONLY the provided HTML snippet based on the user's instruction. "
-    "Your response MUST contain ONLY the updated HTML code for the snippet. "
+    "You are a surgical HTML modification tool. Your task is to rewrite the provided HTML snippet based on the user's instruction. "
+    "The user has provided a larger HTML snippet with a `<!-- EDIT_TARGET -->` comment indicating the specific element of focus. "
+    "You must return the **entire original snippet**, but with the requested modifications applied to the target element. "
+    "Your response MUST be ONLY the modified HTML snippet code. "
     "DO NOT provide explanations, markdown, or the full document. "
     "FAILURE to follow this rule will result in an invalid response. Be precise and minimal."
 )
@@ -131,6 +134,7 @@ def fix_image_sources_smart(html_content: str) -> str:
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         for img in soup.find_all('img'):
+            if img.get('src', '').startswith('http'): continue # Skip already valid images
             context_query = extract_image_context(img)
             image_url = find_image_from_pexels(context_query)
             img['src'] = image_url if image_url else random.choice(get_hardcoded_fallback_images())
@@ -165,7 +169,6 @@ def isolate_html_document(raw_text: str) -> str:
     return match.group(0) if match else ""
 
 def clean_html_snippet(text: str) -> str:
-    # This function is for cleaning small snippets, not full documents
     soup = BeautifulSoup(f"<body>{text}</body>", 'html.parser')
     clean_chatter_and_invalid_tags(soup.body)
     return ''.join(str(c) for c in soup.body.contents)
@@ -176,7 +179,6 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         css = "\n".join(style.string or '' for style in soup.find_all('style'))
         prefixed_css = prefix_css_rules(css, container_id)
         js = "\n".join(script.string or '' for script in soup.find_all('script') if script.string and not script.get('src'))
-
         body_tag = soup.find('body')
         if body_tag:
             for tag in body_tag.find_all(['style', 'script']):
@@ -184,11 +186,9 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
             clean_chatter_and_invalid_tags(body_tag)
             body_html = ''.join(str(c) for c in body_tag.contents)
         else:
-             # Fallback if no body tag found
             for tag in soup.find_all(['style', 'script', 'head', 'html', 'title', 'meta']):
                 tag.decompose()
             body_html = str(soup)
-
         return body_html, prefixed_css, js.strip()
     except Exception as e:
         print(f"Error extracting assets: {e}")
@@ -196,9 +196,9 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
 
 def enhance_generated_html(html: str) -> str:
     soup = BeautifulSoup(html, 'html.parser')
-    if not soup.find('meta', attrs={'name': 'viewport'}):
+    if soup.head and not soup.find('meta', attrs={'name': 'viewport'}):
         soup.head.append(soup.new_tag('meta', attrs={'name': 'viewport', 'content': 'width=device-width, initial-scale=1.0'}))
-    if not soup.find('script', src='https://cdn.tailwindcss.com'):
+    if soup.head and not soup.find('script', src='https://cdn.tailwindcss.com'):
         soup.head.append(soup.new_tag('script', src='https://cdn.tailwindcss.com'))
     return str(soup)
 
@@ -274,45 +274,47 @@ def create_edit_snippet(request: EditSnippetRequest):
     modified_snippet_raw = generate_code(SYSTEM_PROMPT_EDIT_SNIPPET, user_prompt, request.model)
     cleaned_snippet = clean_html_snippet(modified_snippet_raw)
     
-    # Final check to ensure it's valid html
     if cleaned_snippet and '<' in cleaned_snippet:
         return {"snippet": cleaned_snippet}
     
-    # Fallback to original if AI fails to return valid HTML
     original_target = request.contextual_snippet.split('<!-- EDIT_TARGET -->')[1]
     return {"snippet": original_target}
 
+# MODIFICATION: Rewrote this function to be more robust and prevent accidental deletion.
 @app.post("/patch-html")
 def patch_html(request: PatchRequest):
     try:
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
-        
-        # This selector is crucial for finding the right element to modify
-        element_to_modify_parent = soup.select_one(request.parent_selector)
-        if not element_to_modify_parent:
-            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found in document.")
 
-        if not request.new_parent_snippet.strip():
-            raise HTTPException(status_code=400, detail="New parent snippet is empty.")
-        
-        # The new snippet should replace the entire content of the parent.
+        element_to_replace = soup.select_one(request.parent_selector)
+        if not element_to_replace:
+            raise HTTPException(status_code=404, detail=f"Target element for patching with selector '{request.parent_selector}' not found.")
+
+        if not request.new_parent_snippet or not request.new_parent_snippet.strip():
+            raise HTTPException(status_code=400, detail="Received empty snippet from AI for patching.")
+
         fixed_snippet = fix_image_sources_smart(request.new_parent_snippet)
-        new_snippet_soup = BeautifulSoup(fixed_snippet, 'html.parser')
+        new_elements_soup = BeautifulSoup(fixed_snippet, 'html.parser')
         
-        # Clear the original parent and append the new content
-        element_to_modify_parent.clear()
-        for content in new_snippet_soup.contents:
-            element_to_modify_parent.append(content)
+        # Extract the actual content from the parsed snippet
+        new_contents = new_elements_soup.body.contents if new_elements_soup.body else new_elements_soup.contents
+        if not new_contents:
+             raise HTTPException(status_code=500, detail="Failed to parse the new snippet from AI response.")
+
+        # Perform an atomic replacement instead of clear/append
+        element_to_replace.replace_with(*new_contents)
             
         final_container_div = soup.select_one(f'#{request.container_id}')
         body_html = ''.join(str(c) for c in final_container_div.contents) if final_container_div else ''
         
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
-        print(f"Patching error: {e}")
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
+        print(f"FATAL PATCHING ERROR: {e}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"An internal error occurred during HTML patching: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
