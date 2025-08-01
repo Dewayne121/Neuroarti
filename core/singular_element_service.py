@@ -21,10 +21,7 @@ async def rewrite_singular_element(prompt: str, selected_element_html: str, mode
         model
     )
     
-    # Clean and extract the final HTML.
     rewritten_element_html = extract_first_html_element(ai_response_text)
-
-    # Sanitize the result to remove any forbidden tags.
     sanitized_html = sanitize_rewritten_element(rewritten_element_html)
     
     if not sanitized_html.strip():
