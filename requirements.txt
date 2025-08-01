@@ -1,9 +1,8 @@
-gradio
-openai
 fastapi
-uvicorn
-python-multipart
-pydantic
+uvicorn[standard]
+openai
+python-dotenv
 beautifulsoup4
 google-generativeai
 requests
+pydantic
