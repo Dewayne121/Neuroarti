@@ -1,23 +1,27 @@
 # main.py
 import os
-import json
+import uuid
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-# FIX: Import the correct, unified function name
+# Corrected imports
 from core.ai_services import generate_code
-
-# These imports are correct
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT
 )
 from core.models import MODELS
-from core.utils import ip_limiter, is_the_same_html, apply_diff_patch
+from core.utils import (
+    ip_limiter,
+    is_the_same_html,
+    apply_diff_patch,
+    isolate_and_clean_html,
+    extract_assets
+)
 
 load_dotenv()
 
@@ -63,12 +67,23 @@ async def build_or_full_update(request: Request, body: BuildRequest):
     else:
         user_prompt = body.prompt
 
-    # FIX: Call the unified 'generate_code' function with the correct system prompt for building
     ai_response_text = await generate_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     
-    # We are now sending the full response back as JSON, not streaming for this simplified model
-    # A more complex implementation could re-introduce streaming if needed.
-    return JSONResponse(content={"ok": True, "html": ai_response_text})
+    clean_html_doc = isolate_and_clean_html(ai_response_text)
+
+    if not clean_html_doc:
+        raise HTTPException(status_code=500, detail="AI failed to generate valid HTML content.")
+
+    container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
+    body_html, css, js = extract_assets(clean_html_doc, container_id)
+
+    return JSONResponse(content={
+        "ok": True,
+        "html": body_html,
+        "css": css,
+        "js": js,
+        "container_id": container_id
+    })
 
 
 @app.put("/api/ask-ai")
@@ -80,7 +95,6 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     if not body.html:
         raise HTTPException(status_code=400, detail="HTML content is required for a patch update.")
     
-    # For diff-patch, we can use the user-selected model
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
 
@@ -88,16 +102,19 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     if body.selectedElementHtml:
         user_prompt += f"\n\nI have selected a specific element to modify. Please confine your changes to ONLY this element and its children:\n```html\n{body.selectedElementHtml}\n```"
 
-    # FIX: Call the unified 'generate_code' function with the correct system prompt for patching
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
 
-    if not patch_instructions:
-        print("Warning: AI returned empty patch. No changes will be applied.")
-        return {"ok": True, "html": body.html}
+    if not patch_instructions or SEARCH_START not in patch_instructions:
+        print("Warning: AI returned an invalid or empty patch. No changes will be applied.")
+        return JSONResponse(content={"ok": True, "html": body.html})
 
-    updated_html = apply_diff_patch(body.html, patch_instructions)
+    # The diff-patch logic now only modifies the body content, not the full document
+    soup = BeautifulSoup(body.html, 'html.parser')
+    body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+    
+    updated_body_content = apply_diff_patch(body_content, patch_instructions)
 
-    return {"ok": True, "html": updated_html}
+    return JSONResponse(content={"ok": True, "html": updated_body_content})
 
 if __name__ == "__main__":
     import uvicorn
