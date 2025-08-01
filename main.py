@@ -7,20 +7,31 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-from core.prompts import MAX_REQUESTS_PER_IP
-from core.models import MODELS, PROVIDERS
+# FIX: Import the correct, unified function name
+from core.ai_services import generate_code
+
+# These imports are correct
+from core.prompts import (
+    MAX_REQUESTS_PER_IP,
+    INITIAL_SYSTEM_PROMPT,
+    FOLLOW_UP_SYSTEM_PROMPT
+)
+from core.models import MODELS
 from core.utils import ip_limiter, is_the_same_html, apply_diff_patch
-from core.ai_services import generate_code_stream, generate_diff_patch
 
 load_dotenv()
 
-# --- A single, more flexible Pydantic Model ---
-class AIRequest(BaseModel):
+# --- Pydantic Models ---
+class BuildRequest(BaseModel):
     prompt: str
     model: str
-    provider: str
     html: str | None = None
     redesignMarkdown: str | None = None
+
+class UpdateRequest(BaseModel):
+    html: str
+    prompt: str
+    model: str
     selectedElementHtml: str | None = None
 
 app = FastAPI()
@@ -34,43 +45,51 @@ app.add_middleware(
 )
 
 @app.post("/api/ask-ai")
-async def build_or_full_update(request: Request, body: AIRequest):
+async def build_or_full_update(request: Request, body: BuildRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
     
-    selected_model = next((m for m in MODELS if m["value"] == body.model), None)
-    if not selected_model:
+    if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-    
-    provider_key = body.provider if body.provider != "auto" else selected_model.get("autoProvider", "novita")
-    if provider_key not in selected_model["providers"]:
-        raise HTTPException(status_code=400, detail="Provider not supported for this model.")
 
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
+    
+    user_prompt = ""
+    if body.redesignMarkdown:
+        user_prompt = f"Here is my current design as a markdown:\n\n{body.redesignMarkdown}\n\nNow, please create a new design based on this markdown."
+    elif html_context:
+        user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
+    else:
+        user_prompt = body.prompt
 
-    # Now that validation is passed, we can safely start the stream
-    return StreamingResponse(
-        generate_code_stream(body.prompt, body.model, provider_key, html_context, body.redesignMarkdown),
-        media_type="text/plain"
-    )
+    # FIX: Call the unified 'generate_code' function with the correct system prompt for building
+    ai_response_text = await generate_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
+    
+    # We are now sending the full response back as JSON, not streaming for this simplified model
+    # A more complex implementation could re-introduce streaming if needed.
+    return JSONResponse(content={"ok": True, "html": ai_response_text})
+
 
 @app.put("/api/ask-ai")
-async def diff_patch_update(request: Request, body: AIRequest):
+async def diff_patch_update(request: Request, body: UpdateRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
 
     if not body.html:
         raise HTTPException(status_code=400, detail="HTML content is required for a patch update.")
-
-    selected_model = MODELS[0]
-    provider_key = body.provider if body.provider != "auto" else selected_model.get("autoProvider", "novita")
-
-    if provider_key not in selected_model["providers"]:
-        raise HTTPException(status_code=400, detail="Provider not supported for this model.")
     
-    patch_instructions = await generate_diff_patch(body.prompt, selected_model["value"], provider_key, body.html, body.selectedElementHtml)
+    # For diff-patch, we can use the user-selected model
+    if body.model not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid model selected")
+
+    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is: '{body.prompt}'"
+    if body.selectedElementHtml:
+        user_prompt += f"\n\nI have selected a specific element to modify. Please confine your changes to ONLY this element and its children:\n```html\n{body.selectedElementHtml}\n```"
+
+    # FIX: Call the unified 'generate_code' function with the correct system prompt for patching
+    patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
 
     if not patch_instructions:
         print("Warning: AI returned empty patch. No changes will be applied.")
