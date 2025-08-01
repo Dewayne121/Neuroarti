@@ -48,9 +48,7 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- NEW: Supercharged System Prompts ---
-
-# This prompt is designed for general-purpose models like GLM. It's very prescriptive and structured.
+# --- Supercharged Prompts (Unchanged) ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
     "Your response MUST BE ONLY the full, valid HTML code. Do not include any explanations, markdown like ```html, or comments. Your response must start immediately with `<!DOCTYPE html>`."
@@ -76,7 +74,6 @@ GLM_SUPERCHARGED_PROMPT = (
     "\n    - Produce clean, well-formatted, and semantic HTML5 (use `<header>`, `<main>`, `<section>`, `<footer>`, `<nav>`, etc.)."
 )
 
-# This prompt is tailored for code-specialized models like DeepSeek. It's framed as a set of technical directives.
 DEEPSEEK_SUPERCHARGED_PROMPT = (
     "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents based on a user request. "
     "Your output must be ONLY the raw HTML code. No preamble, no markdown, no explanation. Your entire response begins with `<!DOCTYPE html>`."
@@ -178,11 +175,10 @@ async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 async def create_build(request: BuildRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
     
-    # --- KEY CHANGE: Select the appropriate supercharged prompt based on the model ---
     if request.model == "deepseek-r1":
         system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
         print("Using Supercharged Prompt for DeepSeek R1.")
-    else: # Default to the GLM prompt for glm-4.5-air or any other model
+    else: 
         system_prompt = GLM_SUPERCHARGED_PROMPT
         print("Using Supercharged Prompt for GLM-4.5-Air.")
 
@@ -200,12 +196,13 @@ async def create_build(request: BuildRequest):
 @app.post("/update")
 async def update_build(request: UpdateRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING.get("glm-4.5-air"))
-    # Note: The update prompt is kept simpler as it's modifying existing code, not creating from scratch.
-    # You could also create supercharged versions for this if needed.
+    
+    # KEY CHANGE: Enhance the update prompt
     system_prompt = (
         "You are an expert web developer tasked with modifying an existing webpage. "
         "You will receive the complete HTML, CSS, and JS of the current page, along with a user's request for a high-level change. "
-        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure, design system, and existing classes as much as possible, only making the necessary changes. "
+        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure, design system, and existing classes as much as possible. "
+        "**CRITICAL:** Ensure the updated code remains fully responsive. Use Tailwind CSS's responsive utility variants (`sm:`, `md:`, etc.) as needed to maintain a mobile-first design. "
         "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html> and including the modified <style> and <script> tags. "
         "No explanations, no markdown. RESPOND WITH ONLY THE FULL HTML CODE."
     )
@@ -240,12 +237,14 @@ async def update_build(request: UpdateRequest):
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
+    
+    # KEY CHANGE: Enhance the edit-snippet prompt
     system_prompt = (
         "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
         "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
         "You MUST preserve the surrounding parent and sibling elements. Adhere to the existing Tailwind CSS classes and design patterns. "
-        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARGET -->` comment removed. "
-        "NO explanations, NO markdown. Your entire response must be the updated HTML block."
+        "**IMPORTANT:** Ensure your changes are responsive and do not break the layout on mobile devices. Use responsive prefixes like `sm:` and `md:` if you add new layout-related classes. "
+        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARG"
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, model_id)
@@ -256,6 +255,7 @@ async def create_edit_snippet(request: EditSnippetRequest):
     
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
+# Unchanged /patch-html endpoint...
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
@@ -264,8 +264,12 @@ async def patch_html(request: PatchRequest):
 
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
-            raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found in reconstructed document.")
-
+            if request.parent_selector == f"body > #{request.container_id}":
+                 # This means the user is editing a top-level element, and its parent is the container itself.
+                 parent_element = soup.select_one(f"#{request.container_id}")
+            if not parent_element:
+                 raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
+        
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
 
@@ -275,7 +279,13 @@ async def patch_html(request: PatchRequest):
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet from AI response.")
         
-        parent_element.replace_with(*new_contents)
+        # This handles both cases: replacing a child within a parent, or replacing the entire content of the container
+        if request.parent_selector == f"body > #{request.container_id}":
+             parent_element.clear()
+             for content in new_contents:
+                 parent_element.append(content)
+        else:
+             parent_element.replace_with(*new_contents)
 
         container_div = soup.select_one(f'#{request.container_id}')
         if not container_div:
