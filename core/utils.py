@@ -26,7 +26,6 @@ def is_the_same_html(current_html: str) -> bool:
 def apply_diff_patch(original_html: str, ai_response: str) -> str:
     """Parses the AI's diff-patch response and applies it to the original HTML."""
     if not ai_response or SEARCH_START not in ai_response:
-        print("Warning: Invalid AI response format - no SEARCH blocks found")
         return original_html
         
     modified_html = original_html
@@ -71,25 +70,45 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Extracts an HTML element from an AI response using a simple, robust strategy.
-    It prioritizes markdown code blocks, otherwise assumes the raw output is correct.
+    Definitively extracts the first complete HTML element from a messy AI response
+    using a multi-stage cleaning and parsing pipeline.
     """
     if not raw_text:
         return ""
 
     text_to_parse = raw_text.strip()
 
-    # 1. Prioritize markdown code blocks. This is the most reliable signal.
+    # Stage 1: Prioritize markdown code blocks. This is the most reliable signal.
     markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
-        # If a markdown block is found, trust its content completely.
-        return markdown_match.group(1).strip()
-    
-    # 2. If no markdown, assume the AI followed instructions and returned only the element.
-    # This avoids over-processing clean output from well-behaved models.
-    # While this might let chatter through from misbehaving models, it's better
-    # than incorrectly returning an empty string for valid output.
-    return text_to_parse
+        text_to_parse = markdown_match.group(1).strip()
+    else:
+        # Stage 2: If no markdown, find the start of the first HTML tag and discard any preceding chatter.
+        first_tag_match = re.search(r'<', text_to_parse)
+        if first_tag_match:
+            text_to_parse = text_to_parse[first_tag_match.start():]
+        else:
+            # If no HTML tags are found at all, return empty.
+            return ""
+
+    # Stage 3: Use BeautifulSoup to surgically parse the cleaned text and extract ONLY the first valid element.
+    # This prevents duplication if the AI mistakenly returns multiple elements.
+    try:
+        soup = BeautifulSoup(text_to_parse, 'html.parser')
+        
+        # Find the first child that is a Tag, ignoring NavigableString objects (like whitespace or text outside tags)
+        first_element = soup.find(lambda tag: isinstance(tag, Tag))
+        
+        if first_element:
+            return str(first_element)
+        else:
+            # This can happen if the AI responds with something like "I cannot do that." which has no tags.
+            print("Warning: BeautifulSoup found no valid element after cleaning the AI response.")
+            return ""
+    except Exception as e:
+        print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
+        # If parsing fails, the content is untrustworthy.
+        return ""
 
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
