@@ -16,7 +16,6 @@ import random
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
-
 class UpdateRequest(BaseModel):
     html: str
     css: str
@@ -24,12 +23,10 @@ class UpdateRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
     container_id: str
-
 class EditSnippetRequest(BaseModel):
     contextual_snippet: str
     prompt: str
     model: str = "glm-4.5-air"
-
 class PatchRequest(BaseModel):
     html: str
     parent_selector: str
@@ -38,10 +35,10 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration (PEXELS_API_KEY is now important) ---
+# --- Configuration ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY") # Add a Pexels API key for best results
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
 if not TOGETHER_API_KEY:
     raise ValueError("TOGETHER_API_KEY not found.")
@@ -59,8 +56,7 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- The NEW Definitive Image Engine ---
-
+# --- Enhanced Image Engine ---
 def get_hardcoded_fallback_images() -> List[str]:
     """Returns a list of high-quality, guaranteed-to-work Unsplash image URLs."""
     return [
@@ -103,9 +99,9 @@ def extract_image_context(img_tag: BeautifulSoup) -> str:
         if text_content and len(text_content) > 10:
             first_sentence = text_content.split('.')[0]
             words = re.findall(r'\b[a-zA-Z]{4,}\b', first_sentence)
-            return ' '.join(words[:4]) # Use first 4 long words
+            return ' '.join(words[:4])
             
-    return "technology abstract" # A reasonable default
+    return "technology abstract"
 
 def fix_image_sources_smart(html_content: str) -> str:
     """Replaces all image placeholders with the best available real images from Pexels or fallbacks."""
@@ -117,11 +113,8 @@ def fix_image_sources_smart(html_content: str) -> str:
         
         for img in images:
             context_query = extract_image_context(img)
-            
-            # First, try to get a specific image from Pexels
             image_url = find_image_from_pexels(context_query)
             
-            # If Pexels fails or no key, use a high-quality fallback
             if not image_url:
                 image_url = random.choice(get_hardcoded_fallback_images())
             
@@ -130,7 +123,12 @@ def fix_image_sources_smart(html_content: str) -> str:
                 img['alt'] = context_query
             img['loading'] = 'lazy'
             
-            # Add classes to ensure the image displays well
+            # Wrap image in responsive container
+            wrapper = soup.new_tag("div", attrs={"class": "aspect-w-16 aspect-h-9 overflow-hidden rounded-lg"})
+            img.parent.insert_before(wrapper, img)
+            wrapper.append(img)
+            
+            # Add responsive image classes
             img_classes = img.get('class', [])
             if 'object-cover' not in img_classes:
                 img_classes.append('object-cover')
@@ -139,36 +137,50 @@ def fix_image_sources_smart(html_content: str) -> str:
             if 'h-full' not in img_classes:
                 img_classes.append('h-full')
             img['class'] = img_classes
-
+            
         return str(soup)
     except Exception as e:
         print(f"Error in fix_image_sources_smart: {e}")
         return html_content
 
-# --- THE NEW RELAXED RULESET ---
+# --- Enhanced Mandatory Ruleset ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
     "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>`, a `<main>` with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
-    "2.  **VISIBILITY & CONTRAST (CRITICAL):** Ensure high color contrast. Dark text on light backgrounds, light text on dark backgrounds.\n"
-    "3.  **IMAGES:** Use `<img>` tags liberally for visual appeal. **You are NOT responsible for the `src` URL.** Simply provide a highly descriptive `alt` attribute that explains what the image should show. For example: `<img alt=\"A modern web development team collaborating around a large monitor\">`. The system will automatically find and insert the best possible image. **Focus on great `alt` text.**\n"
+    "2.  **DESIGN SYSTEM:** Use Tailwind CSS for all styling. Include this in <head>: <script src='https://cdn.tailwindcss.com'></script>\n"
+    "3.  **RESPONSIVE DESIGN:** Include viewport meta tag: <meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+    "4.  **COLOR PALETTE:** Use this consistent palette: primary-blue-500 (#3B82F6), secondary-green-400 (#34D399), neutral-gray-700 (#374151)\n"
+    "5.  **TYPOGRAPHY:** Use semantic HTML5 with proper hierarchy. Body text: text-gray-700, text-base. Headings: font-bold with decreasing sizes.\n"
+    "6.  **SPACING:** Use Tailwind spacing scale (p-4, m-6, space-y-4, etc.) consistently.\n"
+    "7.  **LAYOUT:** Use CSS Grid or Flexbox for all layouts. Structure content in responsive containers.\n"
+    "8.  **IMAGES:** Wrap all <img> tags in responsive containers: <div class='aspect-w-16 aspect-h-9 overflow-hidden rounded-lg'>[image]</div>\n"
+    "9.  **VISIBILITY & CONTRAST:** Ensure high color contrast. Dark text on light backgrounds, light text on dark backgrounds.\n"
+    "10. **INTERACTION:** Add hover effects to buttons and links (e.g., 'hover:bg-blue-600 transition-colors').\n"
 )
 
-# --- System Prompts (Updated with the new relaxed rules) ---
+# --- Enhanced System Prompts ---
 GLM_SUPERCHARGED_PROMPT = (
-    "You are an elite AI web developer. Your response MUST be ONLY the full HTML code, starting with `<!DOCTYPE html>`.\n\n"
+    "You are an elite UI/UX designer and web developer. Your response MUST be ONLY the full HTML code using Tailwind CSS.\n\n"
     f"{MANDATORY_RULESET}"
+    "11. **DESIGN PRINCIPLES:** Create clean, modern interfaces with ample whitespace, clear visual hierarchy, and consistent spacing.\n"
+    "12. **COMPONENTS:** Use semantic HTML5 with Tailwind classes for responsive layouts. Include interactive elements with hover states.\n"
 )
+
 DEEPSEEK_SUPERCHARGED_PROMPT = (
-    "You are a top-tier frontend architect. Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`.\n\n"
+    "You are a top-tier frontend architect specializing in modern web design. Your output must be ONLY the raw HTML code using Tailwind CSS.\n\n"
     f"{MANDATORY_RULESET}"
+    "11. **AESTHETICS:** Create visually appealing layouts with balanced composition, intentional whitespace, and harmonious color usage.\n"
+    "12. **COMPONENTS:** Build reusable components with consistent styling using Tailwind utility classes.\n"
 )
+
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
-    "You are a world-class AI developer. Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
+    "You are a world-class AI developer with expertise in modern web design. Your response MUST BE ONLY the full, valid HTML code using Tailwind CSS.\n\n"
     f"{MANDATORY_RULESET}"
+    "11. **USER EXPERIENCE:** Design intuitive interfaces with clear navigation, readable content, and accessible elements.\n"
+    "12. **VISUAL HIERARCHY:** Use size, color, and spacing to guide users through content in a logical flow.\n"
 )
 
-
-# --- Helper Functions (Unchanged from last working version) ---
+# --- Helper Functions ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -222,7 +234,52 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- AI Core Functions (Unchanged) ---
+def enhance_generated_html(html: str) -> str:
+    """Ensure generated HTML includes essential elements and frameworks"""
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Ensure viewport meta
+    if not soup.find('meta', attrs={'name': 'viewport'}):
+        viewport = soup.new_tag('meta', attrs={'name': 'viewport', 'content': 'width=device-width, initial-scale=1'})
+        if soup.head:
+            soup.head.append(viewport)
+        else:
+            head = soup.new_tag('head')
+            head.append(viewport)
+            soup.html.insert(0, head)
+    
+    # Ensure Tailwind CSS
+    if not soup.find('script', src='https://cdn.tailwindcss.com'):
+        tailwind = soup.new_tag('script', src='https://cdn.tailwindcss.com')
+        if soup.head:
+            soup.head.append(tailwind)
+        else:
+            head = soup.new_tag('head')
+            head.append(tailwind)
+            soup.html.insert(0, head)
+    
+    # Add default font if not specified
+    if not soup.find('link', attrs={'href': 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'}):
+        font_link = soup.new_tag('link', attrs={
+            'href': 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
+            'rel': 'stylesheet'
+        })
+        if soup.head:
+            soup.head.append(font_link)
+        else:
+            head = soup.new_tag('head')
+            head.append(font_link)
+            soup.html.insert(0, head)
+    
+    # Add default font family to body
+    if soup.body and 'font-sans' not in soup.body.get('class', []):
+        body_classes = soup.body.get('class', [])
+        body_classes.append('font-sans')
+        soup.body['class'] = body_classes
+    
+    return str(soup)
+
+# --- AI Core Functions ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
     model_id = MODEL_MAPPING_TOGETHER.get(model_key)
     if not model_id:
@@ -255,9 +312,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.get("/", response_class=HTMLResponse)
 async def root(): 
-    return "<h1>NeuroArti Pro Builder API is operational with Smart Image Engine.</h1>"
+    return "<h1>NeuroArti Pro Builder API is operational with Enhanced Design System.</h1>"
 
-# --- API Endpoints with Smart Image Replacement ---
+# --- API Endpoints with Enhanced Processing ---
 @app.post("/build")
 def create_build(request: BuildRequest):
     system_prompt = {
@@ -270,7 +327,9 @@ def create_build(request: BuildRequest):
     html_document = isolate_html_document(raw_code)
     
     if html_document:
-        fixed_html_document = fix_image_sources_smart(html_document)
+        # Apply design enhancements
+        enhanced_html = enhance_generated_html(html_document)
+        fixed_html_document = fix_image_sources_smart(enhanced_html)
         container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
         body_html, css, js = extract_assets(fixed_html_document, container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
@@ -285,9 +344,9 @@ def update_build(request: UpdateRequest):
     
     raw_code = generate_code(system_prompt, user_prompt, request.model)
     html_document = isolate_html_document(raw_code)
-
     if html_document:
-        fixed_html_document = fix_image_sources_smart(html_document)
+        enhanced_html = enhance_generated_html(html_document)
+        fixed_html_document = fix_image_sources_smart(enhanced_html)
         body_html, css, js = extract_assets(fixed_html_document, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
         
@@ -324,13 +383,11 @@ def patch_html(request: PatchRequest):
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
-
         parent_element_to_replace = element_to_modify.parent if element_to_modify.parent.name != 'body' else element_to_modify
         parent_element_to_replace.replace_with(*new_contents)
             
         final_container_div = soup.select_one(f'#{request.container_id}')
         if not final_container_div:
-            # The patch might have replaced the container itself, find the new top-level element
             body_html = ''.join(str(c) for c in soup.body.contents)
         else:
              body_html = ''.join(str(c) for c in final_container_div.contents)
