@@ -11,6 +11,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 # FIX: Initialize the client as an AsyncOpenAI client
 together_client = AsyncOpenAI(api_key=TOGETHER_API_KEY, base_url="https://api.together.xyz/v1")
+
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -32,10 +33,16 @@ async def _generate_with_together(system_prompt: str, user_prompt: str, model_ap
 async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_id: str):
     if not GOOGLE_API_KEY:
         raise HTTPException(status_code=503, detail="Google API key not configured. Gemini is unavailable.")
+    
     try:
         model = genai.GenerativeModel(model_api_id)
         full_prompt = f"{system_prompt}\n\nUSER PROMPT: {user_prompt}"
-        safety_settings = {'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'}
+        safety_settings = {
+            'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 
+            'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 
+            'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 
+            'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'
+        }
         
         # FIX: Changed from .generate_content to the asynchronous .generate_content_async
         response = await model.generate_content_async(full_prompt, safety_settings=safety_settings)
@@ -44,15 +51,15 @@ async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_
         print(f"Google AI Error: {e}")
         raise HTTPException(status_code=502, detail=f"Google AI service error: {str(e)}")
 
-# --- Public dispatcher function (no changes needed here) ---
+# --- Public dispatcher function ---
 async def generate_code(system_prompt: str, user_prompt: str, model_key: str):
     model_config = MODELS.get(model_key)
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key provided: {model_key}")
-
+    
     api_provider = model_config["api_provider"]
     model_api_id = model_config["api_id"]
-
+    
     if api_provider == "together":
         return await _generate_with_together(system_prompt, user_prompt, model_api_id)
     elif api_provider == "google":
