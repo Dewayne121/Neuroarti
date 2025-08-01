@@ -19,19 +19,17 @@ def is_singular_element(html_string: str) -> bool:
     e.g., <h1>text</h1> is singular, but <div><h1>text</h1></div> is not.
     """
     try:
-        soup = BeautifulSoup(html_string, 'html.parser')
-        # Find the first actual tag.
-        first_tag = soup.find(lambda tag: isinstance(tag, Tag))
+        soup = BeautifulSoup(f"<div>{html_string}</div>", 'html.parser')
+        # Find the first actual tag within our wrapper.
+        first_tag = soup.div.find(lambda tag: isinstance(tag, Tag))
         if first_tag:
-            # Count all tags within the first tag (including itself).
-            # If the count is 1, it has no nested children tags.
-            return len(first_tag.find_all(True)) == 1
+            # An element is singular if it contains no other tags within it.
+            return not bool(first_tag.find(lambda tag: isinstance(tag, Tag)))
         return False
     except Exception:
         return False
 
 def is_the_same_html(current_html: str) -> bool:
-    """Checks if the provided HTML is the same as the default placeholder, ignoring whitespace and comments."""
     def normalize(html_str: str) -> str:
         if not html_str: return ""
         soup = BeautifulSoup(html_str, 'html.parser')
@@ -58,7 +56,6 @@ def apply_diff_patch(original_html: str, ai_response: str) -> str:
     return modified_html
 
 def isolate_and_clean_html(raw_text: str) -> str:
-    """Finds the start of a FULL HTML document and removes any preceding text."""
     if not raw_text: 
         return ""
     match = re.search(r'<!DOCTYPE html>', raw_text, re.IGNORECASE)
@@ -67,12 +64,9 @@ def isolate_and_clean_html(raw_text: str) -> str:
     match = re.search(r'<html', raw_text, re.IGNORECASE)
     if match: 
         return raw_text[match.start():]
-    return raw_text # Fallback
+    return raw_text
 
 def extract_first_html_element(raw_text: str) -> str:
-    """
-    Definitively extracts the first complete HTML element from an AI response.
-    """
     if not raw_text:
         return ""
     text_to_parse = raw_text.strip()
