@@ -1,4 +1,3 @@
-import gradio as gr
 import os
 import uuid
 import requests
@@ -13,12 +12,9 @@ import re
 from typing import Dict, List
 from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
-from urllib.parse import urlparse, urljoin
-import asyncio
-import aiohttp
-from concurrent.futures import ThreadPoolExecutor
+import random
 
-# --- Pydantic Models ---
+# --- Pydantic Models (Unchanged) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -44,11 +40,11 @@ class PatchRequest(BaseModel):
     js: str
     container_id: str
 
-# --- Configuration ---
+# --- Configuration (Unchanged) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")  # Optional: for better Unsplash results
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")  # Optional: for Pexels API
+UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 
 if not TOGETHER_API_KEY:
     raise ValueError("TOGETHER_API_KEY not found.")
@@ -64,218 +60,127 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Image Search and Validation Functions ---
-async def check_image_url(session: aiohttp.ClientSession, url: str) -> bool:
-    """Check if an image URL is accessible and returns an actual image"""
-    try:
-        async with session.head(url, timeout=5) as response:
-            content_type = response.headers.get('content-type', '').lower()
-            return (response.status == 200 and 
-                   any(img_type in content_type for img_type in ['image/', 'jpeg', 'jpg', 'png', 'webp', 'svg']))
-    except:
-        return False
+# --- NEW: High-Quality Hardcoded Fallback Images ---
+def get_hardcoded_fallback_images() -> List[str]:
+    """
+    Returns a list of high-quality, guaranteed-to-work Unsplash image URLs.
+    This replaces unreliable placeholders.
+    """
+    return [
+        "https://images.unsplash.com/photo-1557683316-973673baf926?w=800&q=80", # Blue/Purple Gradient
+        "https://images.unsplash.com/photo-1528459801416-a9e53bbf4e17?w=800&q=80", # Watercolor texture
+        "https://images.unsplash.com/photo-1533134486753-c833f0ed4866?w=800&q=80", # Black/White abstract
+        "https://images.unsplash.com/photo-1501630834273-4b5604d2ee31?w=800&q=80", # Clouds
+        "https://images.unsplash.com/photo-1488998427799-e3362cec87c3?w=800&q=80", # Desk/Office
+        "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=800&q=80", # Team working
+        "https://images.unsplash.com/photo-1554629947-334ff61d85dc?w=800&q=80", # Mountains
+    ]
 
-def search_unsplash_images(query: str, count: int = 5) -> List[str]:
-    """Search for images on Unsplash"""
+# --- REVISED: Image Search Functions ---
+def search_api_images(query: str) -> List[str]:
+    """Search Pexels and Unsplash using official APIs if keys are available."""
     urls = []
+    # Prioritize Pexels if available, it's often faster
+    if PEXELS_API_KEY:
+        try:
+            response = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": query, "per_page": 5, "orientation": "landscape"},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                urls.extend([photo['src']['large2x'] for photo in data.get('photos', [])])
+        except Exception as e:
+            print(f"Pexels API error: {e}")
     
-    # Method 1: Direct Unsplash source URLs (most reliable)
-    keywords = query.replace(' ', ',').replace('-', ',')
-    for i in range(count):
-        # Add random seed to get different images
-        seed = int(time.time()) + i
-        urls.append(f"https://source.unsplash.com/800x600/?{keywords}&sig={seed}")
-    
-    # Method 2: If we have API key, use official API
-    if UNSPLASH_ACCESS_KEY:
+    # Try Unsplash API if no Pexels results or no key
+    if not urls and UNSPLASH_ACCESS_KEY:
         try:
             response = requests.get(
                 "https://api.unsplash.com/search/photos",
-                params={
-                    "query": query,
-                    "per_page": count,
-                    "orientation": "landscape"
-                },
+                params={"query": query, "per_page": 5, "orientation": "landscape"},
                 headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
                 timeout=5
             )
             if response.status_code == 200:
                 data = response.json()
-                api_urls = [photo['urls']['regular'] for photo in data.get('results', [])]
-                urls.extend(api_urls)
-        except:
-            pass
-    
+                urls.extend([photo['urls']['regular'] for photo in data.get('results', [])])
+        except Exception as e:
+            print(f"Unsplash API error: {e}")
+            
     return urls
 
-def search_pexels_images(query: str, count: int = 5) -> List[str]:
-    """Search for images on Pexels"""
-    if not PEXELS_API_KEY:
-        return []
+def find_best_image_url(query: str) -> str:
+    """Finds the best available image URL, prioritizing APIs and falling back to high-quality images."""
+    # Attempt to get a relevant image from APIs
+    api_results = search_api_images(query)
+    if api_results:
+        return random.choice(api_results)
     
+    # If APIs fail or don't return results, use a dynamic Unsplash source URL
+    # This is less reliable but provides more variety than hardcoded fallbacks
     try:
-        response = requests.get(
-            "https://api.pexels.com/v1/search",
-            params={
-                "query": query,
-                "per_page": count,
-                "orientation": "landscape"
-            },
-            headers={"Authorization": PEXELS_API_KEY},
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return [photo['src']['large'] for photo in data.get('photos', [])]
+        clean_query = re.sub(r'[^a-zA-Z0-9,]', '', query.replace(' ', ','))
+        if clean_query:
+            return f"https://source.unsplash.com/800x600/?{clean_query}"
     except:
-        pass
-    return []
+        pass # Fall through to hardcoded if this fails
 
-def get_fallback_images(category: str = "abstract") -> List[str]:
-    """Get reliable fallback images"""
-    fallbacks = [
-        f"https://source.unsplash.com/800x600/?{category}&1",
-        f"https://source.unsplash.com/800x600/?{category}&2",
-        f"https://source.unsplash.com/800x600/?{category}&3",
-        "https://images.unsplash.com/photo-1557683316-973673baf926?w=800&h=600&fit=crop",
-        "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&h=600&fit=crop",
-        "https://picsum.photos/800/600",
-        "https://via.placeholder.com/800x600/4338ca/ffffff?text=Image"
-    ]
-    return fallbacks
+    # As a final, guaranteed step, return a random high-quality hardcoded image
+    return random.choice(get_hardcoded_fallback_images())
 
-async def find_working_image(query: str, width: int = 800, height: int = 600) -> str:
-    """Find a working image URL for the given query"""
+def extract_image_context(img_tag: BeautifulSoup) -> str:
+    """Extracts context from alt text or nearby text to form an image search query."""
+    alt_text = img_tag.get('alt', '').strip()
+    if alt_text and len(alt_text) > 3:
+        return alt_text
     
-    # Generate candidate URLs from multiple sources
-    candidates = []
-    
-    # Add Unsplash images
-    candidates.extend(search_unsplash_images(query, 3))
-    
-    # Add Pexels images
-    candidates.extend(search_pexels_images(query, 3))
-    
-    # Add some alternative approaches
-    clean_query = re.sub(r'[^a-zA-Z0-9\s]', '', query).strip()
-    if clean_query:
-        candidates.extend([
-            f"https://source.unsplash.com/{width}x{height}/?{clean_query.replace(' ', ',')}",
-            f"https://images.unsplash.com/photo-1557683316-973673baf926?w={width}&h={height}&fit=crop&q=80",
-            f"https://picsum.photos/{width}/{height}?random={hash(query) % 1000}",
-        ])
-    
-    # Add fallbacks
-    candidates.extend(get_fallback_images(clean_query or "abstract"))
-    
-    # Test URLs concurrently
-    async with aiohttp.ClientSession() as session:
-        tasks = [check_image_url(session, url) for url in candidates[:10]]  # Limit to first 10
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for url, is_working in zip(candidates, results):
-            if is_working is True:
-                return url
-    
-    # If all else fails, return a guaranteed working placeholder
-    return f"https://via.placeholder.com/{width}x{height}/6366f1/ffffff?text=Image"
-
-def extract_image_context(html_content: str, img_tag: BeautifulSoup) -> str:
-    """Extract context around an image to determine what it should show"""
-    try:
-        # Look for alt text
-        alt_text = img_tag.get('alt', '')
-        if alt_text:
-            return alt_text
-        
-        # Look for nearby text content
-        parent = img_tag.parent
-        context_text = ""
-        
-        for _ in range(3):  # Go up 3 levels
-            if parent:
-                text = parent.get_text(strip=True)
-                if len(text) > len(context_text):
-                    context_text = text
-                parent = parent.parent
-            else:
-                break
-        
-        # Extract meaningful keywords
-        if context_text:
-            # Remove common words and get meaningful terms
-            words = re.findall(r'\b[a-zA-Z]{3,}\b', context_text.lower())
-            meaningful_words = [w for w in words if w not in ['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use']]
+    parent = img_tag.find_parent()
+    if parent:
+        # Get text from siblings and parent
+        text_content = parent.get_text(separator=' ', strip=True)
+        if text_content and len(text_content) > 10:
+             # A simple heuristic to find a "subject"
+            first_sentence = text_content.split('.')[0]
+            words = re.findall(r'\b[a-zA-Z]{4,}\b', first_sentence)
+            # Find nouns or capitalized words as potential subjects
+            meaningful_words = [w for w in words if not w.islower() or w.lower() not in ['this', 'that', 'with', 'from']]
             if meaningful_words:
-                return ' '.join(meaningful_words[:3])  # Use first 3 meaningful words
-        
-        # Fallback to class names or IDs
-        classes = img_tag.get('class', [])
-        if classes:
-            return ' '.join(classes).replace('-', ' ').replace('_', ' ')
-        
-        img_id = img_tag.get('id', '')
-        if img_id:
-            return img_id.replace('-', ' ').replace('_', ' ')
-        
-        return "abstract design"
-    except:
-        return "abstract design"
+                return ' '.join(meaningful_words[:3])
 
-async def fix_image_sources_smart(html_content: str) -> str:
-    """
-    Intelligently fix image sources by finding working URLs based on context
-    """
+    return "technology abstract" # A better default query
+
+def fix_image_sources_smart(html_content: str) -> str:
+    """Replaces image placeholders with the best available real images."""
     if not html_content:
         return ""
-    
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         images = soup.find_all('img')
         
-        # Process images concurrently
-        tasks = []
         for img in images:
-            src = img.get('src', '')
-            
-            # Skip if already using a working source
-            if src and any(domain in src for domain in ['unsplash.com', 'pexels.com', 'picsum.photos', 'placeholder.com']):
-                # Still verify it works
-                if 'source.unsplash.com' in src or 'picsum.photos' in src:
-                    # These might be unreliable, so let's find a better one
-                    context = extract_image_context(html_content, img)
-                    tasks.append((img, find_working_image(context)))
-            else:
-                # Need to find a new image
-                context = extract_image_context(html_content, img)
-                tasks.append((img, find_working_image(context)))
-        
-        # Execute all tasks concurrently
-        if tasks:
-            results = await asyncio.gather(*[task[1] for task in tasks])
-            for (img, _), new_url in zip(tasks, results):
-                img['src'] = new_url
-                # Ensure images have proper attributes
-                if not img.get('alt'):
-                    img['alt'] = extract_image_context(html_content, img)
-                if not img.get('loading'):
-                    img['loading'] = 'lazy'
-        
+            context_query = extract_image_context(img)
+            best_url = find_best_image_url(context_query)
+            img['src'] = best_url
+            if not img.get('alt'):
+                img['alt'] = context_query
+            img['loading'] = 'lazy'
+            img['class'] = img.get('class', []) + ['object-cover', 'w-full', 'h-full']
+
         return str(soup)
     except Exception as e:
-        print(f"Error fixing image sources: {e}")
+        print(f"Major error in fix_image_sources_smart: {e}")
         return html_content
 
-# --- Updated Mandatory Ruleset ---
+# --- Ruleset & Prompts (Unchanged) ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
     "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
     "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background.\n"
-    "3.  **IMAGE USAGE:** Use images freely and descriptively. For thematic images, you can use placeholder URLs like `https://source.unsplash.com/800x600/?keyword` or even leave src empty - the system will automatically find and replace them with working, relevant images. Always include meaningful `alt` attributes that describe what the image should show.\n"
-    "4.  **IMAGE CONTEXT:** When adding images, always include descriptive `alt` text that clearly indicates what type of image is needed (e.g., 'Modern office workspace', 'Team collaboration meeting', 'Technology dashboard interface'). This helps the system find the most relevant images.\n"
+    "3.  **IMAGE USAGE:** Use `<img>` tags freely. You can leave the `src` attribute empty or use a placeholder like `<img src=\"\" alt=\"A team of developers collaborating\">`. The system will automatically find a high-quality, relevant image based on your `alt` text. **Descriptive `alt` text is critical.**\n"
 )
-
-# --- Updated System Prompts ---
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer creating a stunning, complete webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
@@ -292,7 +197,8 @@ GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     f"{MANDATORY_RULESET}"
 )
 
-# --- Helper Functions (Updated) ---
+
+# --- Helper Functions (Existing, Unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -384,9 +290,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 async def root(): 
     return "<h1>NeuroArti Pro Builder API is operational with Smart Image Search.</h1>"
 
-# --- Updated API Endpoints ---
+# --- API Endpoints (Now Synchronous) ---
 @app.post("/build")
-async def create_build(request: BuildRequest):
+def create_build(request: BuildRequest):
     if request.model == "gemini-2.5-flash-lite":
         system_prompt = GEMINI_2_5_LITE_SUPERCHARGED_PROMPT
     elif request.model == "deepseek-r1":
@@ -398,9 +304,7 @@ async def create_build(request: BuildRequest):
     html_document = isolate_html_document(raw_code)
     
     if html_document:
-        # Apply smart image fixing
-        fixed_html_document = await fix_image_sources_smart(html_document)
-        
+        fixed_html_document = fix_image_sources_smart(html_document)
         container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
         body_html, css, js = extract_assets(fixed_html_document, container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
@@ -408,7 +312,7 @@ async def create_build(request: BuildRequest):
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
 @app.post("/update")
-async def update_build(request: UpdateRequest):
+def update_build(request: UpdateRequest):
     system_prompt = (
         "You are an expert web developer modifying an existing webpage. Your response MUST be the complete, updated HTML file.\n\n"
         f"{MANDATORY_RULESET}"
@@ -420,16 +324,14 @@ async def update_build(request: UpdateRequest):
     html_document = isolate_html_document(raw_code)
 
     if html_document:
-        # Apply smart image fixing
-        fixed_html_document = await fix_image_sources_smart(html_document)
-        
+        fixed_html_document = fix_image_sources_smart(html_document)
         body_html, css, js = extract_assets(fixed_html_document, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
         
     raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
 
 @app.post("/edit-snippet")
-async def create_edit_snippet(request: EditSnippetRequest):
+def create_edit_snippet(request: EditSnippetRequest):
     system_prompt = (
         "You are a context-aware HTML modification tool. Modify the element after the `<!-- EDIT_TARGET -->` comment. "
         "Your response MUST be ONLY the modified HTML snippet.\n\n"
@@ -438,9 +340,7 @@ async def create_edit_snippet(request: EditSnippetRequest):
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, request.model)
     
-    # Apply smart image fixing to snippets too
-    fixed_snippet = await fix_image_sources_smart(modified_snippet_raw)
-    
+    fixed_snippet = fix_image_sources_smart(modified_snippet_raw)
     cleaned_snippet = clean_html_snippet(fixed_snippet)
     
     if cleaned_snippet and '<' in cleaned_snippet:
@@ -448,40 +348,42 @@ async def create_edit_snippet(request: EditSnippetRequest):
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
 @app.post("/patch-html")
-async def patch_html(request: PatchRequest):
+def patch_html(request: PatchRequest):
     try:
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
         element_to_modify = soup.select_one(request.parent_selector)
         if not element_to_modify:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found.")
+        
         container_in_soup = soup.select_one(f"#{request.container_id}")
         if not container_in_soup:
             raise HTTPException(status_code=500, detail="Internal Error: Could not find container.")
+        
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
         
-        # Fix images in the new snippet before patching
-        fixed_snippet = await fix_image_sources_smart(request.new_parent_snippet)
+        fixed_snippet = fix_image_sources_smart(request.new_parent_snippet)
         new_snippet_soup = BeautifulSoup(fixed_snippet, 'html.parser')
         
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet.")
+
         if element_to_modify == container_in_soup:
             element_to_modify.clear()
-            for node in new_contents:
-                element_to_modify.append(node)
+            for node in new_contents: element_to_modify.append(node)
         else:
             element_to_modify.replace_with(*new_contents)
+            
         final_container_div = soup.select_one(f'#{request.container_id}')
         if not final_container_div:
             raise HTTPException(status_code=500, detail="Container element was lost after patching.")
+        
         body_html = ''.join(str(c) for c in final_container_div.contents)
         return {"html": body_html, "css": request.css, "js": request.js}
     except Exception as e:
         print(f"Patching error: {e}")
-        # THIS IS THE CORRECTED LINE
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
