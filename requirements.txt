@@ -1,8 +1,10 @@
 gradio
 openai
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 pydantic
 beautifulsoup4
 google-generativeai
+requests
+lxml
