@@ -13,7 +13,7 @@ from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_SURGICAL_EDIT, # Import the new prompt
+    SYSTEM_PROMPT_SURGICAL_EDIT,
     SEARCH_START
 )
 from core.models import MODELS
@@ -43,7 +43,7 @@ class UpdateRequest(BaseModel):
 class RewriteRequest(BaseModel):
     prompt: str
     model: str
-    html: str # The full page HTML is now required
+    html: str
     selectedElementHtml: str
 
 app = FastAPI()
@@ -99,41 +99,34 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
-    if body.model not in MODELS:
-        raise HTTPException(status_code=400, detail="Invalid model selected")
     if not body.html or not body.selectedElementHtml:
         raise HTTPException(status_code=400, detail="Full HTML and a selected element are required.")
     
     try:
         # --- Robust "Surgical Marker" Method ---
-        # 1. Parse the full document first to find the element reliably
         full_soup = BeautifulSoup(body.html, 'html.parser')
         
-        # Find all tags that match the string representation of the selected element
-        possible_targets = full_soup.find_all(lambda tag: str(tag) == body.selectedElementHtml)
-        
-        if not possible_targets:
+        # Find the target element within the full document using its string representation
+        # This is more robust than a simple string.replace()
+        target_element = full_soup.find(lambda tag: str(tag) == body.selectedElementHtml)
+
+        if not target_element:
             raise Exception("The selected element could not be found in the full HTML document.")
-        
-        # Mark the first match with our unique attribute
-        target_element = possible_targets[0]
+
         target_element['data-neuro-edit-target'] = 'true'
         marked_full_html = str(full_soup)
 
-        # 2. Create the user prompt for the AI.
         user_prompt_for_ai = (
             f"**Full HTML Document:**\n```html\n{marked_full_html}\n```\n\n"
             f"**User's Instruction:**\n'{body.prompt}'\n\n"
         )
 
-        # 3. Call the AI with the new surgical prompt.
         ai_response_text = await generate_code(
             SYSTEM_PROMPT_SURGICAL_EDIT,
             user_prompt_for_ai,
             body.model
         )
 
-        # 4. Clean the response and extract assets.
         updated_full_html = isolate_and_clean_html(ai_response_text)
         if not updated_full_html:
             raise Exception("AI returned an empty or invalid full HTML document.")
