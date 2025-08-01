@@ -2,7 +2,7 @@ import os
 import uuid
 import requests
 import re
-from typing import Dict, List
+from typing import List
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
 import random
 
-# --- Pydantic Models ---
+# --- Pydantic Models (Updated for new endpoint) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -25,18 +25,16 @@ class UpdateRequest(BaseModel):
     model: str = "glm-4.5-air"
     container_id: str
 
-class EditSnippetRequest(BaseModel):
-    contextual_snippet: str
-    prompt: str
-    model: str = "glm-4.5-air"
-
-class PatchRequest(BaseModel):
+# NEW MODEL for the improved editing endpoint
+class EditElementRequest(BaseModel):
     html: str
-    parent_selector: str
-    new_parent_snippet: str
     css: str
     js: str
     container_id: str
+    selector: str # Direct selector for the element to be edited
+    prompt: str
+    model: str = "glm-4.5-air"
+
 
 # --- Configuration ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
@@ -84,18 +82,15 @@ SYSTEM_PROMPT_UPDATE = (
     f"{MANDATORY_RULESET_V2}"
 )
 
-# MODIFICATION: Made the prompt for snippet editing even stricter to prevent errors.
-SYSTEM_PROMPT_EDIT_SNIPPET = (
-    "You are a surgical HTML modification tool. Your task is to rewrite the provided HTML snippet based on the user's instruction. "
-    "The user has provided a larger HTML snippet with a `<!-- EDIT_TARGET -->` comment indicating the specific element of focus. "
-    "You must return the **entire original snippet**, but with the requested modifications applied to the target element. "
-    "Your response MUST be ONLY the modified HTML snippet code. "
-    "DO NOT provide explanations, markdown, or the full document. "
-    "FAILURE to follow this rule will result in an invalid response. Be precise and minimal."
+# NEW, highly focused prompt for rewriting a single element.
+SYSTEM_PROMPT_REWRITE_ELEMENT = (
+    "You are an expert HTML element rewriter. Your task is to take an HTML element and a user's instruction, then return a new version of that exact element with the changes applied. "
+    "**CRITICAL RULE: Your response MUST be ONLY the rewritten HTML element's code.** "
+    "Do not provide explanations, markdown, or any surrounding text. "
+    "If the input is a `<div>`, your output must start with `<div>`. If it's a `<p>`, your output must start with `<p>`."
 )
 
-
-# --- Image Engine ---
+# --- Image Engine & Helpers (Unchanged) ---
 def get_hardcoded_fallback_images() -> List[str]:
     return [
         "https://images.pexels.com/photos/3184418/pexels-photo-3184418.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
@@ -107,12 +102,7 @@ def get_hardcoded_fallback_images() -> List[str]:
 def find_image_from_pexels(query: str) -> str:
     if not PEXELS_API_KEY or not query: return ""
     try:
-        response = requests.get(
-            "https://api.pexels.com/v1/search",
-            params={"query": query, "per_page": 5, "orientation": "landscape"},
-            headers={"Authorization": PEXELS_API_KEY},
-            timeout=7
-        )
+        response = requests.get("https://api.pexels.com/v1/search", params={"query": query, "per_page": 5, "orientation": "landscape"}, headers={"Authorization": PEXELS_API_KEY}, timeout=7)
         if response.status_code == 200 and response.json().get('photos'):
             return random.choice(response.json()['photos'])['src']['large2x']
     except Exception as e:
@@ -125,8 +115,7 @@ def extract_image_context(img_tag: BeautifulSoup) -> str:
     parent = img_tag.find_parent()
     if parent:
         text_content = re.sub(r'\s+', ' ', parent.get_text(strip=True))
-        if len(text_content) > 10:
-            return ' '.join(text_content.split()[:5])
+        if len(text_content) > 10: return ' '.join(text_content.split()[:5])
     return "modern technology abstract"
 
 def fix_image_sources_smart(html_content: str) -> str:
@@ -134,7 +123,7 @@ def fix_image_sources_smart(html_content: str) -> str:
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         for img in soup.find_all('img'):
-            if img.get('src', '').startswith('http'): continue # Skip already valid images
+            if img.get('src', '').startswith('http'): continue
             context_query = extract_image_context(img)
             image_url = find_image_from_pexels(context_query)
             img['src'] = image_url if image_url else random.choice(get_hardcoded_fallback_images())
@@ -145,24 +134,18 @@ def fix_image_sources_smart(html_content: str) -> str:
         print(f"Error in fix_image_sources_smart: {e}")
         return html_content
 
-# --- Helper Functions ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
-    if not container_id: return css_content
+    if not container_id or not css_content: return css_content
     def prefixer(match):
         selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
         return ", ".join(selectors) + match.group(2)
     css_content = re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, css_content)
-    css_content = re.sub(r'(@media[^{]*{\s*)(.*?)(\s*})',
-                         lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3),
-                         css_content, flags=re.DOTALL)
+    css_content = re.sub(r'(@media[^{]*{\s*)(.*?)(\s*})', lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3), css_content, flags=re.DOTALL)
     return css_content
 
 def clean_chatter_and_invalid_tags(soup):
     for tag in soup.find_all(['think', 'thought', 'explanation']):
         tag.decompose()
-    for element in soup.find_all(text=lambda text: isinstance(text, NavigableString) and text.parent.name in ['body', 'div', 'section']):
-        if element.string.strip():
-            element.extract()
 
 def isolate_html_document(raw_text: str) -> str:
     match = re.search(r'<!DOCTYPE html>.*</html>', raw_text, re.DOTALL | re.IGNORECASE)
@@ -202,12 +185,11 @@ def enhance_generated_html(html: str) -> str:
         soup.head.append(soup.new_tag('script', src='https://cdn.tailwindcss.com'))
     return str(soup)
 
-# --- AI Core Functions ---
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
+    # ... (This function remains unchanged)
     try:
         if model_key == "gemini-2.5-flash-lite":
-            if not GOOGLE_API_KEY:
-                raise HTTPException(status_code=503, detail="Google API key not configured.")
+            if not GOOGLE_API_KEY: raise HTTPException(status_code=503, detail="Google API key not configured.")
             model = genai.GenerativeModel(model_key)
             full_prompt = f"{system_prompt}\n\nUSER PROMPT: {user_prompt}"
             safety_settings = {'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'}
@@ -215,18 +197,13 @@ def generate_code(system_prompt: str, user_prompt: str, model_key: str):
             return response.text
         else:
             model_id = MODEL_MAPPING_TOGETHER.get(model_key)
-            if not model_id:
-                raise HTTPException(status_code=400, detail=f"Invalid model key for Together AI: {model_key}")
-            response = together_client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.2,
-                max_tokens=8192
-            )
+            if not model_id: raise HTTPException(status_code=400, detail=f"Invalid model key for Together AI: {model_key}")
+            response = together_client.chat.completions.create(model=model_id, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], temperature=0.2, max_tokens=8192)
             return response.choices[0].message.content or ""
     except Exception as e:
         print(f"Error calling AI model {model_key}: {e}")
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+
 
 # --- FastAPI App ---
 app = FastAPI()
@@ -241,80 +218,69 @@ async def root():
 def create_build(request: BuildRequest):
     raw_code = generate_code(SYSTEM_PROMPT_BUILD, request.prompt, request.model)
     html_document = isolate_html_document(raw_code)
-
     if html_document:
         enhanced_html = enhance_generated_html(html_document)
         fixed_images_html = fix_image_sources_smart(enhanced_html)
         container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
         body_html, css, js = extract_assets(fixed_images_html, container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": container_id}
-
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
 @app.post("/update")
 def update_build(request: UpdateRequest):
     full_html_for_ai = f"""<!DOCTYPE html><html><head><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div><script>{request.js}</script></html>"""
     user_prompt = f"USER REQUEST: '{request.prompt}'\n\nCURRENT WEBSITE CODE:\n{full_html_for_ai}"
-
     raw_code = generate_code(SYSTEM_PROMPT_UPDATE, user_prompt, request.model)
     html_document = isolate_html_document(raw_code)
-
     if html_document:
         enhanced_html = enhance_generated_html(html_document)
         fixed_images_html = fix_image_sources_smart(enhanced_html)
         body_html, css, js = extract_assets(fixed_images_html, request.container_id)
         return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
-
     raise HTTPException(status_code=500, detail="AI failed to update the HTML document.")
 
-@app.post("/edit-snippet")
-def create_edit_snippet(request: EditSnippetRequest):
-    user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
-    
-    modified_snippet_raw = generate_code(SYSTEM_PROMPT_EDIT_SNIPPET, user_prompt, request.model)
-    cleaned_snippet = clean_html_snippet(modified_snippet_raw)
-    
-    if cleaned_snippet and '<' in cleaned_snippet:
-        return {"snippet": cleaned_snippet}
-    
-    original_target = request.contextual_snippet.split('<!-- EDIT_TARGET -->')[1]
-    return {"snippet": original_target}
-
-# MODIFICATION: Rewrote this function to be more robust and prevent accidental deletion.
-@app.post("/patch-html")
-def patch_html(request: PatchRequest):
+# NEW /edit-element endpoint replacing the old logic
+@app.post("/edit-element")
+def edit_element(request: EditElementRequest):
     try:
-        full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
+        # 1. Reconstruct the full document for accurate selection
+        full_html_doc = f'<html><head><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div><script>{request.js}</script></body></html>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
 
-        element_to_replace = soup.select_one(request.parent_selector)
-        if not element_to_replace:
-            raise HTTPException(status_code=404, detail=f"Target element for patching with selector '{request.parent_selector}' not found.")
+        # 2. Find the target element using its direct selector
+        target_element = soup.select_one(request.selector)
+        if not target_element:
+            raise HTTPException(status_code=404, detail=f"Target element with selector '{request.selector}' not found.")
 
-        if not request.new_parent_snippet or not request.new_parent_snippet.strip():
-            raise HTTPException(status_code=400, detail="Received empty snippet from AI for patching.")
-
-        fixed_snippet = fix_image_sources_smart(request.new_parent_snippet)
-        new_elements_soup = BeautifulSoup(fixed_snippet, 'html.parser')
+        # 3. Ask the AI to rewrite just this element
+        original_element_html = str(target_element)
+        user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCURRENT HTML ELEMENT:\n{original_element_html}"
         
-        # Extract the actual content from the parsed snippet
-        new_contents = new_elements_soup.body.contents if new_elements_soup.body else new_elements_soup.contents
-        if not new_contents:
-             raise HTTPException(status_code=500, detail="Failed to parse the new snippet from AI response.")
+        new_element_html_raw = generate_code(SYSTEM_PROMPT_REWRITE_ELEMENT, user_prompt, request.model)
+        
+        if not new_element_html_raw or not new_element_html_raw.strip().startswith('<'):
+            raise HTTPException(status_code=500, detail="AI returned an invalid or empty response for the element edit.")
 
-        # Perform an atomic replacement instead of clear/append
-        element_to_replace.replace_with(*new_contents)
+        # 4. Replace the old element with the new one
+        new_element_soup = BeautifulSoup(new_element_html_raw, 'html.parser')
+        
+        # Make sure we get the actual element from the parsed response
+        new_element = new_element_soup.find()
+        if not new_element:
+            raise HTTPException(status_code=500, detail="Could not parse the new element from AI response.")
             
-        final_container_div = soup.select_one(f'#{request.container_id}')
-        body_html = ''.join(str(c) for c in final_container_div.contents) if final_container_div else ''
+        target_element.replace_with(new_element)
         
-        return {"html": body_html, "css": request.css, "js": request.js}
+        # 5. Extract assets from the modified full document and return
+        body_html, css, js = extract_assets(str(soup), request.container_id)
+
+        return {"html": body_html, "css": css, "js": js, "container_id": request.container_id}
+
     except Exception as e:
-        print(f"FATAL PATCHING ERROR: {e}")
+        print(f"EDIT ELEMENT ERROR: {e}")
         if isinstance(e, HTTPException):
             raise e
-        raise HTTPException(status_code=500, detail=f"An internal error occurred during HTML patching: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=f"An internal error occurred during element edit: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
