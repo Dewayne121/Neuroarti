@@ -12,7 +12,7 @@ from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_REWRITE_ELEMENT, # <-- Import new prompt
+    SYSTEM_PROMPT_REWRITE_ELEMENT,
     SEARCH_START
 )
 from core.models import MODELS
@@ -33,17 +33,15 @@ class BuildRequest(BaseModel):
 class UpdateRequest(BaseModel):
     prompt: str
     model: str
-    html: str # Full HTML document for context
+    html: str 
     css: str
     js: str
     container_id: str
-    selectedElementHtml: str | None = None
 
-# New model for the dedicated rewrite endpoint
+# New, simpler model for the rewrite endpoint
 class RewriteRequest(BaseModel):
     prompt: str
     model: str
-    html: str # Full HTML document for context
     selectedElementHtml: str # The specific element to be rewritten
 
 app = FastAPI()
@@ -89,7 +87,6 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
     
-    # This endpoint is now ONLY for global edits, so we construct the prompt accordingly.
     user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
     
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
@@ -112,7 +109,7 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
             "ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id
         })
 
-# --- NEW DEDICATED ENDPOINT FOR ROBUST ELEMENT EDITING ---
+# --- RE-ARCHITECTED ENDPOINT FOR RELIABLE ELEMENT EDITING ---
 @app.put("/api/rewrite-element")
 async def rewrite_element(request: Request, body: RewriteRequest):
     ip = request.client.host
@@ -120,14 +117,15 @@ async def rewrite_element(request: Request, body: RewriteRequest):
         return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-    if not body.html or not body.selectedElementHtml:
-        raise HTTPException(status_code=400, detail="HTML content and a selected element are required for a rewrite.")
+    if not body.selectedElementHtml:
+        raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
 
-    # Create a focused prompt for the AI
+    # Create the forceful, focused prompt for the AI to rewrite a single element
     user_prompt_for_ai = (
         f"**Original HTML Element:**\n```html\n{body.selectedElementHtml}\n```\n\n"
-        f"**User's Instruction:**\n'{body.prompt}'\n\n"
-        "Rewrite the element above to fulfill the user's instruction."
+        f"**User's Instruction to change it:**\n'{body.prompt}'\n\n"
+        "Rewrite the HTML element above to ONLY fulfill the user's instruction. "
+        "Your response MUST BE the new HTML element's code and nothing else."
     )
 
     try:
@@ -138,38 +136,18 @@ async def rewrite_element(request: Request, body: RewriteRequest):
             body.model
         )
         
-        # Clean up the AI response to ensure it's just the element
         rewritten_element_html = isolate_and_clean_html(rewritten_element_html)
-
         if not rewritten_element_html.strip():
              raise HTTPException(status_code=500, detail="AI returned an empty element.")
 
-        # Directly and reliably replace the original element in the full HTML
-        # This is more robust than a diff-patch for this specific task
-        updated_full_html = body.html.replace(body.selectedElementHtml, rewritten_element_html, 1)
-
-        # Re-extract all assets from the newly modified document
-        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id") # container_id isn't used here
-
         return JSONResponse(content={
             "ok": True,
-            "html": updated_body_content,
-            "css": updated_css,
-            "js": updated_js,
-            "container_id": "some-id" # Not critical for this response but good to have
+            "rewrittenHtml": rewritten_element_html,
         })
 
     except Exception as e:
         print(f"Error during element rewrite: {e}")
-        soup = BeautifulSoup(body.html, 'html.parser')
-        original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
-        return JSONResponse(content={
-            "ok": True,
-            "html": original_body_content,
-            "css": "",
-            "js": ""
-        }, status_code=500)
-
+        return JSONResponse(status_code=500, content={"ok": False, "message": f"AI failed during rewrite: {e}"})
 
 if __name__ == "__main__":
     import uvicorn
