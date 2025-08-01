@@ -72,29 +72,39 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Definitively extracts the first complete HTML element from an AI response
-    using a simple and robust parsing strategy.
+    Definitively extracts the first complete HTML element from a messy AI response
+    using a multi-stage cleaning and parsing pipeline.
     """
     if not raw_text:
         return ""
-    
+
     text_to_parse = raw_text.strip()
-    
-    # Step 1: Prioritize markdown code blocks.
-    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', text_to_parse, re.DOTALL)
+
+    # Stage 1: Prioritize markdown code blocks. This is the most reliable signal.
+    markdown_match = re.search(r'```(?:html)?\n(.*)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
     else:
-        # Step 2: If no markdown, find the start of the first HTML tag and discard any preceding chatter.
-        first_tag_match = re.search(r'<', text_to_parse)
-        if first_tag_match:
-            text_to_parse = text_to_parse[first_tag_match.start():]
-        else:
-            return "" # No HTML tags found.
-    
-    # Step 3: Use BeautifulSoup's find() method to directly get the first tag.
+        # Stage 2: If no markdown, actively filter out chatter tags to find the first real HTML tag.
+        chatter_tags_to_ignore = ['think', 'thought', 'explanation']
+        found_valid_start = False
+        # Find all potential tags in the text
+        for match in re.finditer(r'<([a-zA-Z0-9]+)', text_to_parse):
+            tag_name = match.group(1).lower()
+            if tag_name not in chatter_tags_to_ignore:
+                # This is the first non-chatter tag. Slice the string from here.
+                text_to_parse = text_to_parse[match.start():]
+                found_valid_start = True
+                break
+        if not found_valid_start:
+            return "" # The entire response was likely chatter or contained no valid tags.
+
+    # Stage 3: Use BeautifulSoup to surgically parse the cleaned text and extract ONLY the first valid element.
+    # This prevents duplication if the AI mistakenly returns multiple elements.
     try:
         soup = BeautifulSoup(text_to_parse, 'html.parser')
+        
+        # Directly find the first element that is a real tag.
         first_element = soup.find(lambda tag: isinstance(tag, Tag))
         
         if first_element:
@@ -103,6 +113,7 @@ def extract_first_html_element(raw_text: str) -> str:
     except Exception as e:
         print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
         return ""
+
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     """Extracts CSS, JS, and body content from a full HTML document, REMOVING COMMENTS."""
