@@ -133,7 +133,6 @@ async def rewrite_element(request: Request, body: RewriteRequest):
             body.model
         )
         
-        # Use the new, more robust extraction function
         rewritten_element_html = extract_first_html_element(ai_response_text)
         
         if not rewritten_element_html.strip():
