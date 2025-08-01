@@ -9,8 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
 
 from core.ai_services import generate_code
-# Import the new rewrite service
-from core.rewrite_service import rewrite_html_element
+# Import the new specialized services
+from core.singular_element_service import rewrite_singular_element
+from core.complex_element_service import rewrite_complex_element
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
@@ -23,7 +24,8 @@ from core.utils import (
     is_the_same_html,
     apply_diff_patch,
     isolate_and_clean_html,
-    extract_assets
+    extract_assets,
+    is_singular_element # Import the detector function
 )
 
 load_dotenv()
@@ -110,12 +112,22 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
     
     try:
-        # Delegate all logic to the new service
-        rewritten_html = await rewrite_html_element(
-            prompt=body.prompt,
-            selected_element_html=body.selectedElementHtml,
-            model=body.model
-        )
+        # The main endpoint now acts as a smart router
+        if is_singular_element(body.selectedElementHtml):
+            # Use the service dedicated to simple tags
+            rewritten_html = await rewrite_singular_element(
+                prompt=body.prompt,
+                selected_element_html=body.selectedElementHtml,
+                model=body.model
+            )
+        else:
+            # Use the service dedicated to complex components
+            rewritten_html = await rewrite_complex_element(
+                prompt=body.prompt,
+                selected_element_html=body.selectedElementHtml,
+                model=body.model
+            )
+            
         return JSONResponse(content={"ok": True, "rewrittenHtml": rewritten_html})
     except Exception as e:
         print(f"Error during element rewrite: {e}")
