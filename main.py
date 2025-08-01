@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from core.ai_services import generate_code
 from core.prompts import (
@@ -107,34 +107,38 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
     
     try:
         # --- The "Surgical Marker" Method ---
-        # 1. Add a unique marker to the selected element in the full HTML
+        # 1. Parse the selected element to add a marker.
         soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
-        selected_tag = soup.find(lambda tag: isinstance(tag, BeautifulSoup.Tag))
+        selected_tag = soup.find(lambda tag: isinstance(tag, Tag))
         if not selected_tag:
             raise HTTPException(status_code=400, detail="Invalid selected element HTML.")
         
-        # This creates a version of the tag with our marker attribute
-        marked_tag_str = str(selected_tag)
+        # This is the original string we need to find and replace.
+        original_tag_str = str(selected_tag)
+        
+        # Add our marker attribute.
         selected_tag['data-neuro-edit-target'] = 'true'
         marked_tag_with_attr = str(selected_tag)
 
-        # Reliably replace the original element with the marked one
-        marked_full_html = body.html.replace(marked_tag_str, marked_tag_with_attr, 1)
+        # Reliably replace the original element with the marked one in the full HTML.
+        if original_tag_str not in body.html:
+             raise Exception("The selected element could not be found in the full HTML document.")
+        marked_full_html = body.html.replace(original_tag_str, marked_tag_with_attr, 1)
 
-        # 2. Create the user prompt for the AI
+        # 2. Create the user prompt for the AI.
         user_prompt_for_ai = (
             f"**Full HTML Document:**\n```html\n{marked_full_html}\n```\n\n"
             f"**User's Instruction:**\n'{body.prompt}'\n\n"
         )
 
-        # 3. Call the AI with the new surgical prompt
+        # 3. Call the AI with the new surgical prompt.
         ai_response_text = await generate_code(
             SYSTEM_PROMPT_SURGICAL_EDIT,
             user_prompt_for_ai,
             body.model
         )
 
-        # 4. Clean the response and extract assets
+        # 4. Clean the response and extract assets.
         updated_full_html = isolate_and_clean_html(ai_response_text)
         if not updated_full_html:
             raise Exception("AI returned an empty or invalid full HTML document.")
