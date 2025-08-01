@@ -10,13 +10,12 @@ import re
 from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 import google.generativeai as genai
-import requests
-from urllib.parse import urlparse
 
 # --- Pydantic Models (Unchanged) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
+
 class UpdateRequest(BaseModel):
     html: str
     css: str
@@ -24,10 +23,12 @@ class UpdateRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
     container_id: str
+
 class EditSnippetRequest(BaseModel):
     contextual_snippet: str
     prompt: str
     model: str = "glm-4.5-air"
+
 class PatchRequest(BaseModel):
     html: str
     parent_selector: str
@@ -39,28 +40,29 @@ class PatchRequest(BaseModel):
 # --- Configuration (Unchanged) ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
 if not TOGETHER_API_KEY:
     raise ValueError("TOGETHER_API_KEY not found.")
 if not GOOGLE_API_KEY:
     print("Warning: GOOGLE_API_KEY not found. The Gemini model will not be available.")
+
 together_client = OpenAI(api_key=TOGETHER_API_KEY, base_url="https://api.together.xyz/v1")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
+
 MODEL_MAPPING_TOGETHER = {
     "glm-4.5-air": "zai-org/GLM-4.5-Air-FP8",
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- FIX: Enhanced Mandatory Ruleset with Stronger Image Requirements ---
+# --- FIX: The Mandatory Ruleset for High-Quality Output ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
-    "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
-    "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background.\n"
-    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this:\n"
-    "    - For all thematic, background, or object images, you MUST use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Use creative, descriptive keywords.\n"
-    "    - For all user avatars or profile photos, you MUST use the `randomuser.me/api/portraits/` service.\n"
-    "    - ALWAYS include a logo in the header - either as text, SVG, or an image from unsplash.\n"
-    "    - NEVER use placeholder images or broken links. All images must be functional."
+    "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`."
+    "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background."
+    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this:"
+    "    - For all thematic, background, or object images, you MUST use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Use creative, descriptive keywords."
+    "    - For all user avatars or profile photos, you MUST use the `randomuser.me/api/portraits/` service."
 )
 
 # --- Supercharged System Prompts (Now with the Mandatory Ruleset) ---
@@ -69,18 +71,20 @@ GLM_SUPERCHARGED_PROMPT = (
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
+
 DEEPSEEK_SUPERCHARGED_PROMPT = (
     "You are a top-tier frontend architect AI writing a production-ready, single-file HTML document. "
     "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
+
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     "You are a world-class AI developer writing a clean, modern, single-file HTML webpage. "
     "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`.\n\n"
     f"{MANDATORY_RULESET}"
 )
 
-# --- Helper Functions ---
+# --- Helper Functions (unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -91,7 +95,6 @@ def prefix_css_rules(css_content: str, container_id: str) -> str:
                          lambda m: m.group(1) + re.sub(r'([^\r\n,{}]+(?:,[^\r\n,{}]+)*)(\s*{)', prefixer, m.group(2)) + m.group(3), 
                          css_content, flags=re.DOTALL)
     return css_content
-
 def clean_chatter_and_invalid_tags(soup_or_tag):
     if not hasattr(soup_or_tag, 'children'): return
     nodes_to_remove = [child for child in list(soup_or_tag.children) 
@@ -101,79 +104,17 @@ def clean_chatter_and_invalid_tags(soup_or_tag):
     for child in soup_or_tag.children:
         if hasattr(child, 'name'):
             clean_chatter_and_invalid_tags(child)
-
 def isolate_html_document(raw_text: str) -> str:
     doctype_start = raw_text.lower().find('<!doctype html')
     return raw_text[doctype_start:] if doctype_start != -1 else ""
-
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
     if soup.body:
         return ''.join(str(c) for c in soup.body.contents)
     return str(soup)
-
-# --- NEW: Image Validation and Fixing Function ---
-def validate_and_fix_images(html_content: str) -> str:
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Check for logo in header
-    header = soup.find('header')
-    if header:
-        nav = header.find('nav')
-        if nav and not nav.find(['img', 'svg']):
-            # Add a default logo if none exists
-            logo_div = soup.new_tag('div', attrs={'class': 'flex items-center space-x-2'})
-            logo_svg = soup.new_tag('svg', attrs={
-                'xmlns': 'http://www.w3.org/2000/svg',
-                'width': '32',
-                'height': '32',
-                'viewBox': '0 0 24 24',
-                'fill': 'none',
-                'stroke': 'currentColor',
-                'stroke-width': '2',
-                'stroke-linecap': 'round',
-                'stroke-linejoin': 'round'
-            })
-            logo_path = soup.new_tag('path', attrs={'d': 'M12 2L2 7L12 12L22 7L12 2Z'})
-            logo_path2 = soup.new_tag('path', attrs={'d': 'M2 17L12 22L22 17'})
-            logo_path3 = soup.new_tag('path', attrs={'d': 'M2 12L12 17L22 12'})
-            logo_svg.append(logo_path)
-            logo_svg.append(logo_path2)
-            logo_svg.append(logo_path3)
-            logo_span = soup.new_tag('span', attrs={'class': 'font-bold text-xl'})
-            logo_span.string = "NeuroArti"
-            logo_div.append(logo_svg)
-            logo_div.append(logo_span)
-            nav.insert(0, logo_div)
-    
-    # Fix all image tags
-    for img in soup.find_all('img'):
-        src = img.get('src', '')
-        
-        # If no src or invalid src
-        if not src or not src.startswith(('http://', 'https://')):
-            # Replace with a valid unsplash image
-            img['src'] = 'https://source.unsplash.com/random/400x300?nature,technology'
-            continue
-        
-        # Validate the image URL works
-        try:
-            response = requests.head(src, timeout=3)
-            if response.status_code != 200:
-                # Replace broken image
-                img['src'] = 'https://source.unsplash.com/random/400x300?nature,technology'
-        except:
-            # Replace on any error
-            img['src'] = 'https://source.unsplash.com/random/400x300?nature,technology'
-    
-    return str(soup)
-
 def extract_assets(html_content: str, container_id: str) -> tuple:
     try:
-        # First validate and fix images
-        html_content = validate_and_fix_images(html_content)
-        
         soup = BeautifulSoup(html_content, 'html.parser')
         css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
         prefixed_css = prefix_css_rules(css_content, container_id)
@@ -200,7 +141,6 @@ def generate_with_together(system_prompt: str, user_prompt: str, model_key: str)
         raise HTTPException(status_code=400, detail=f"Invalid model key for Together AI: {model_key}")
     response = together_client.chat.completions.create(model=model_id, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], temperature=0.1, max_tokens=8192)
     return response.choices[0].message.content or ""
-
 def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str):
     if not GOOGLE_API_KEY:
          raise HTTPException(status_code=503, detail="Google API key not configured. Gemini model is unavailable.")
@@ -209,7 +149,6 @@ def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str
     safety_settings = {'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE', 'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE', 'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'}
     response = model.generate_content(full_prompt, safety_settings=safety_settings)
     return response.text
-
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
     try:
         if model_key == "gemini-2.5-flash-lite":
@@ -226,7 +165,6 @@ def generate_code(system_prompt: str, user_prompt: str, model_key: str):
 # --- FastAPI App (Unchanged) ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
 @app.get("/", response_class=HTMLResponse)
 async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 
