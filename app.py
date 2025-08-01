@@ -55,15 +55,16 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- FIX: The Mandatory Ruleset for High-Quality Output ---
+# --- FIX: The Mandatory Ruleset for High-Quality Output (IMPROVED) ---
 MANDATORY_RULESET = (
     "**MANDATORY RULESET (You MUST follow these rules on ALL responses):**\n"
-    "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`."
-    "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background."
-    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this:"
-    "    - For all thematic, background, or object images, you MUST use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Use creative, descriptive keywords."
-    "    - For all user avatars or profile photos, you MUST use the `randomuser.me/api/portraits/` service."
+    "1.  **STRUCTURE & COMPLETENESS:** Every page MUST include a `<header>` with a `<nav>` bar, a logo (text or SVG), navigation links, a `<main>` tag with multiple diverse `<section>`s, and a detailed `<footer>`.\n"
+    "2.  **VISIBILITY & CONTRAST (CRITICAL):** You MUST ensure high color contrast. If any element has a light background (e.g., `bg-white`, `bg-slate-100`), all text inside it MUST be a dark color (e.g., `text-gray-900`, `text-slate-800`). NEVER place light text on a light background.\n"
+    "3.  **IMAGE RELIABILITY (CRITICAL):** All images MUST work. To guarantee this, you MUST ONLY use the following two services. NO OTHER placeholder services (like placehold.co, picsum.photos, etc.) are allowed.\n"
+    "    - **For all thematic, background, or object images:** Use the `source.unsplash.com/random/WIDTHxHEIGHT?keyword,keyword2` service. Example: `<img src=\"https://source.unsplash.com/random/800x600?technology,office\">`. Use creative, descriptive keywords relevant to the user's prompt.\n"
+    "    - **For all user avatars or profile photos:** Use the `randomuser.me/api/portraits/` service. You must include the gender (`men`/`women`) and a number (0-99). Example: `<img src=\"https://randomuser.me/api/portraits/women/45.jpg\">`."
 )
+
 
 # --- Supercharged System Prompts (Now with the Mandatory Ruleset) ---
 GLM_SUPERCHARGED_PROMPT = (
@@ -168,7 +169,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/", response_class=HTMLResponse)
 async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 
-# --- API Endpoints ---
+# --- API Endpoints (Unchanged) ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
     if request.model == "gemini-2.5-flash-lite":
@@ -248,7 +249,7 @@ async def patch_html(request: PatchRequest):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
-# --- Uvicorn runner ---
+# --- Uvicorn runner (Unchanged) ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
