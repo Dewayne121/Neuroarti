@@ -1,6 +1,6 @@
 # core/utils.py
 import re
-from bs4 import BeautifulSoup, Comment, Tag # <-- CRITICAL BUG FIX: Added Tag import
+from bs4 import BeautifulSoup, Comment, Tag
 from core.prompts import DEFAULT_HTML, SEARCH_START, DIVIDER, REPLACE_END
 
 # In-memory store for IP-based rate limiting
@@ -39,16 +39,15 @@ def apply_diff_patch(original_html: str, ai_response: str) -> str:
         replace_block = replace_block.strip('\n')
         if search_block in modified_html:
             modified_html = modified_html.replace(search_block, replace_block, 1)
+        else:
+             print(f"Warning: Search block not found for diff-patch:\n'{search_block[:100]}...'")
     return modified_html
 
 def isolate_and_clean_html(raw_text: str) -> str:
-    """
-    Finds the start of a FULL HTML document and removes any preceding text or markdown.
-    """
+    """Finds the start of a FULL HTML document and removes any preceding text or markdown."""
     if not raw_text: 
         return ""
     
-    # Handle markdown code blocks that might wrap the entire HTML
     markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', raw_text, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
@@ -63,7 +62,7 @@ def isolate_and_clean_html(raw_text: str) -> str:
     if html_match:
         return text_to_parse[html_match.start():]
         
-    return text_to_parse # Fallback if no doctype or html tag is found
+    return text_to_parse
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     """Extracts CSS, JS, and body content from a full HTML document."""
@@ -79,7 +78,6 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
                 tag.decompose()
             body_html = ''.join(str(c) for c in body_tag.contents)
         else:
-            # Fallback if no body tag, clean the whole document
             for tag in soup.find_all(['head', 'style', 'script']):
                 tag.decompose()
             body_html = str(soup)
