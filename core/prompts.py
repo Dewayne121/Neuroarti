@@ -1,16 +1,12 @@
 # core/prompts.py
-
 # --- Block Markers for Diff-Patch System ---
 SEARCH_START = "<<<<<<< SEARCH"
 DIVIDER = "======="
 REPLACE_END = ">>>>>>> REPLACE"
-
 # --- Request Limits ---
 MAX_REQUESTS_PER_IP = 2
-
 # --- Initial Generation Prompt ---
 INITIAL_SYSTEM_PROMPT = """You are an expert UI/UX designer and frontend developer. Your task is to create a complete, single HTML file based on the user's prompt, using only HTML, CSS, and JavaScript.
-
 **Design & Code Mandates:**
 1.  **Structure:** The page MUST be well-structured with semantic HTML5 tags, including a `<header>`, a `<main>` with multiple, distinct `<section>`s, and a detailed `<footer>`. Ensure the document is complete from `<!DOCTYPE html>` to `</html>`.
 2.  **Styling:** Use Tailwind CSS for all styling. You MUST include `<script src="https://cdn.tailwindcss.com"></script>` in the `<head>`. Do not use custom `<style>` blocks unless absolutely necessary for complex animations or unsupported features.
@@ -20,11 +16,9 @@ INITIAL_SYSTEM_PROMPT = """You are an expert UI/UX designer and frontend develop
 6.  **Content:** Create rich, elaborate, and unique content. Fill the page with realistic and engaging placeholder text and images. For images, use descriptive `alt` text and use high-quality, relevant placeholders from services like Pexels or Unsplash (e.g., `https://images.pexels.com/photos/3184418/`).
 7.  **Output Format:** Your entire response MUST be a single, complete HTML file. Do not include any explanations, comments, or markdown formatting outside of the HTML code itself.
 """
-
 # --- Follow-Up / Edit Prompt (Diff-Patch) ---
 FOLLOW_UP_SYSTEM_PROMPT = f"""You are an expert web developer specializing in precise code modifications. Your task is to modify an existing HTML file based on the user's request.
 You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT output the entire HTML file. Your goal is to generate the MINIMAL changes necessary to fulfill the request.
-
 **CRITICAL FORMATTING RULES:**
 1.  Start each modification block with `{SEARCH_START}`.
 2.  Inside the SEARCH block, provide the EXACT lines from the current code that need to be changed. This match must be perfect, including all whitespace and indentation.
@@ -35,9 +29,7 @@ You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT 
 7.  **To insert code:** Use a line that directly precedes the desired insertion point in the SEARCH block. In the REPLACE block, include that original line followed by the new lines to be inserted.
 8.  **To delete code:** Provide the lines to delete in the SEARCH block and leave the REPLACE block completely empty.
 9.  **To modify a specific element:** If the user's prompt refers to a specific element they selected, your changes MUST be scoped to that element and its children.
-
 **FAILURE CONDITION:** If you output the entire HTML file or do not use the SEARCH/REPLACE format, you have failed. Be precise and surgical in your changes.
-
 Example:
 Use code with caution.
 Python
@@ -48,7 +40,9 @@ Here are the changes for the title.
 <h1 class="text-3xl font-bold">New, Better Title</h1>
 {REPLACE_END}
 Generated code
-<!DOCTYPE html>
+"""
+# --- Default HTML Content ---
+DEFAULT_HTML = """<!DOCTYPE html>
 <html>
   <head>
     <title>My app</title>
@@ -56,7 +50,7 @@ Generated code
     <meta charset="utf-8">
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
-  <body class="flex justify-center items-center h-screen overflow-hidden bg-white font-sans text-center px-6">
+  <body class="flex justify-center items-center h-screen overflow-hidden bg-white font-sans text-center px-6 relative">
     <div class="w-full">
       <span class="text-xs rounded-full mb-2 inline-block px-2 py-1 border border-amber-500/15 bg-amber-500/15 text-amber-500">🔥 New version dropped!</span>
       <h1 class="text-4xl lg:text-6xl font-bold font-sans">
@@ -64,7 +58,7 @@ Generated code
         Ask me anything.
       </h1>
     </div>
-      <img src="https://enzostvs-deepsite.hf.space/arrow.svg" class="absolute bottom-8 left-0 w-[100px] transform rotate-[30deg]" />
+    <img src="https://enzostvs-deepsite.hf.space/arrow.svg" class="absolute bottom-8 left-0 w-[100px] transform rotate-[30deg]" />
     <script></script>
   </body>
 </html>
