@@ -10,7 +10,7 @@ import re
 from typing import Dict
 from bs4 import BeautifulSoup, NavigableString
 
-# --- Pydantic Models ---
+# --- Pydantic Models (Unchanged) ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str = "glm-4.5-air"
@@ -34,9 +34,9 @@ class PatchRequest(BaseModel):
     new_parent_snippet: str
     css: str
     js: str
-    container_id: str # <<< KEY FIX 1: Add container_id to the model
+    container_id: str
 
-# --- Configuration ---
+# --- Configuration (Unchanged) ---
 API_KEY = os.environ.get("TOGETHER_API_KEY")
 if not API_KEY:
     raise ValueError("API Key not found. Please set TOGETHER_API_KEY.")
@@ -48,7 +48,58 @@ MODEL_MAPPING = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Helper Functions ---
+# --- NEW: Supercharged System Prompts ---
+
+# This prompt is designed for general-purpose models like GLM. It's very prescriptive and structured.
+GLM_SUPERCHARGED_PROMPT = (
+    "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
+    "Your response MUST BE ONLY the full, valid HTML code. Do not include any explanations, markdown like ```html, or comments. Your response must start immediately with `<!DOCTYPE html>`."
+    "\n\n**-- MANDATORY TECHNICAL SPECIFICATIONS --**"
+    "\n1.  **Technology Stack:**"
+    "\n    - Use HTML5 with Tailwind CSS loaded from the CDN: `<script src=\"https://cdn.tailwindcss.com\"></script>`."
+    "\n    - All custom CSS must be placed within a single `<style>` tag in the `<head>`."
+    "\n    - All JavaScript must be placed within a single `<script>` tag just before the closing `</body>` tag."
+    "\n2.  **Structural Completeness & Depth:**"
+    "\n    - Do not generate a simple, short page. Create a comprehensive, multi-section webpage that feels like a real, finished product."
+    "\n    - Your generated page MUST include these sections: Navigation Bar, a prominent Hero Section, a Features or Services section, a Testimonials or About Us section, a Call-to-Action (CTA) section, and a detailed Footer."
+    "\n3.  **Mandatory Elements:**"
+    "\n    - **Logo:** The navigation bar MUST contain a logo. This can be a well-styled text logo (e.g., `<div class='font-bold text-2xl'>Paws & Tails</div>`) or an SVG icon. Be creative."
+    "\n    - **Footer:** The footer MUST be comprehensive, containing links, social media icons (use Font Awesome if needed), and a copyright notice (e.g., `© 2024 YourCompanyName. All rights reserved.`)."
+    "\n4.  **Content & Imagery:**"
+    "\n    - Generate rich, relevant, and plausible placeholder content (text, headlines, etc.)."
+    "\n    - Use high-quality, professional placeholder images from `https://images.unsplash.com/`. Use specific, descriptive photo URLs to match the theme (e.g., for a pet store, use a real Unsplash URL of a dog or cat)."
+    "\n5.  **Design, UX, and Responsiveness:**"
+    "\n    - The design must be modern, clean, and visually appealing with a consistent color scheme and ample whitespace."
+    "\n    - Add subtle hover effects and transitions on buttons and links to make the page feel interactive."
+    "\n    - The layout MUST be fully responsive and look excellent on all screen sizes. Use Tailwind's responsive prefixes (`sm:`, `md:`, `lg:`) extensively."
+    "\n6.  **Code Quality:**"
+    "\n    - Produce clean, well-formatted, and semantic HTML5 (use `<header>`, `<main>`, `<section>`, `<footer>`, `<nav>`, etc.)."
+)
+
+# This prompt is tailored for code-specialized models like DeepSeek. It's framed as a set of technical directives.
+DEEPSEEK_SUPERCHARGED_PROMPT = (
+    "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents based on a user request. "
+    "Your output must be ONLY the raw HTML code. No preamble, no markdown, no explanation. Your entire response begins with `<!DOCTYPE html>`."
+    "\n\n**-- TECHNICAL DIRECTIVES --**"
+    "\n1.  **Core Stack:** HTML, Tailwind CSS (via CDN: `<script src=\"https://cdn.tailwindcss.com\"></script>`). Place all CSS in a `<style>` block in the `<head>`. Place all JS in a `<script>` block before `</body>`."
+    "\n2.  **Architectural Blueprint:** The generated document must be a complete, multi-section landing page, not a simple component. You are required to construct the following semantic structure:"
+    "\n    - `<header>` containing a `<nav>` element. This nav MUST feature a logo (text-based, inline SVG, or an icon) and navigation links."
+    "\n    - `<main>` containing multiple `<section>` tags for different content blocks (e.g., hero, features, about, testimonials, CTA)."
+    "\n    - `<footer>` which must be detailed. It should include navigation links, social media icons (Font Awesome recommended), and a copyright statement."
+    "\n3.  **Component-Level Detail:**"
+    "\n    - Generate high-fidelity components. For a 'features' section, don't just list items; create cards with icons, headings, and descriptive text."
+    "\n    - For a 'hero' section, use a high-impact background image (from `https://images.unsplash.com/`) with a strong headline and a primary call-to-action button."
+    "\n4.  **Responsive Grid & Flexbox:**"
+    "\n    - Implement a mobile-first responsive strategy using Tailwind's variants (`sm:`, `md:`, `lg:`, `xl:`) as a primary requirement."
+    "\n    - The layout must reflow elegantly from a single column on mobile to multi-column layouts on larger screens."
+    "\n5.  **Micro-interactions & UX:**"
+    "\n    - All interactive elements (buttons, links, cards) must have hover states (`hover:bg-blue-600`, `hover:scale-105`, etc.) and smooth transitions (`transition-all duration-300`)."
+    "\n6.  **Code Standards:**"
+    "\n    - Write clean, indented, and readable HTML. Adhere strictly to semantic HTML5 standards."
+    "\n    - Ensure accessibility basics: `alt` attributes for all `<img>` tags, `aria-label` for icon buttons, etc."
+)
+
+# --- Helper Functions (Unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
     if not container_id: return css_content
     def prefixer(match):
@@ -77,11 +128,9 @@ def isolate_html_document(raw_text: str) -> str:
 def clean_html_snippet(text: str) -> str:
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
-    # If AI wraps response in html/body, extract only body contents
     if soup.body:
         return ''.join(str(c) for c in soup.body.contents)
     return str(soup)
-
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     try:
@@ -92,7 +141,6 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         body_tag = soup.find('body')
         if body_tag:
             clean_chatter_and_invalid_tags(body_tag)
-            # Check if the body's direct child is the container, and if so, extract its contents
             container_in_body = body_tag.find(id=container_id)
             if container_in_body and container_in_body.parent == body_tag:
                  body_content = ''.join(str(c) for c in container_in_body.contents)
@@ -105,7 +153,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         print(f"Error extracting assets: {e}")
         return html_content, "", ""
 
-# --- AI Core Functions ---
+# --- AI Core Functions (Unchanged) ---
 def generate_code(system_prompt: str, user_prompt: str, model_id: str):
     try:
         response = client.chat.completions.create(
@@ -118,7 +166,7 @@ def generate_code(system_prompt: str, user_prompt: str, model_id: str):
         print(f"Error calling AI model {model_id}: {e}")
         raise HTTPException(status_code=502, detail=f"AI service error: {e}")
 
-# --- FastAPI App ---
+# --- FastAPI App (Unchanged) ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -129,12 +177,15 @@ async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 @app.post("/build")
 async def create_build(request: BuildRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING["glm-4.5-air"])
-    system_prompt = (
-        "You are a silent code generation machine. Your response MUST be ONLY valid HTML code. "
-        "Start your response immediately with <!DOCTYPE html>. No explanations, no comments, no markdown. "
-        "Generate a complete single HTML file using Tailwind CSS via CDN. "
-        "Place CSS in <style> tags and JS in <script> tags. RESPOND WITH ONLY HTML CODE."
-    )
+    
+    # --- KEY CHANGE: Select the appropriate supercharged prompt based on the model ---
+    if request.model == "deepseek-r1":
+        system_prompt = DEEPSEEK_SUPERCHARGED_PROMPT
+        print("Using Supercharged Prompt for DeepSeek R1.")
+    else: # Default to the GLM prompt for glm-4.5-air or any other model
+        system_prompt = GLM_SUPERCHARGED_PROMPT
+        print("Using Supercharged Prompt for GLM-4.5-Air.")
+
     raw_code = generate_code(system_prompt, request.prompt, model_id)
     html_document = isolate_html_document(raw_code)
     
@@ -145,13 +196,16 @@ async def create_build(request: BuildRequest):
     
     raise HTTPException(status_code=500, detail="AI failed to generate a valid HTML document.")
 
+
 @app.post("/update")
 async def update_build(request: UpdateRequest):
     model_id = MODEL_MAPPING.get(request.model, MODEL_MAPPING.get("glm-4.5-air"))
+    # Note: The update prompt is kept simpler as it's modifying existing code, not creating from scratch.
+    # You could also create supercharged versions for this if needed.
     system_prompt = (
         "You are an expert web developer tasked with modifying an existing webpage. "
         "You will receive the complete HTML, CSS, and JS of the current page, along with a user's request for a high-level change. "
-        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure and content as much as possible, only making the necessary changes. "
+        "Intelligently modify the provided code to fulfill the request. Preserve the overall structure, design system, and existing classes as much as possible, only making the necessary changes. "
         "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html> and including the modified <style> and <script> tags. "
         "No explanations, no markdown. RESPOND WITH ONLY THE FULL HTML CODE."
     )
@@ -189,7 +243,7 @@ async def create_edit_snippet(request: EditSnippetRequest):
     system_prompt = (
         "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
         "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
-        "You MUST preserve the surrounding parent and sibling elements. "
+        "You MUST preserve the surrounding parent and sibling elements. Adhere to the existing Tailwind CSS classes and design patterns. "
         "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARGET -->` comment removed. "
         "NO explanations, NO markdown. Your entire response must be the updated HTML block."
     )
@@ -202,15 +256,12 @@ async def create_edit_snippet(request: EditSnippetRequest):
     
     return {"snippet": request.contextual_snippet.replace('<!-- EDIT_TARGET -->', '')}
 
-# <<< KEY FIX 2: Update the entire /patch-html endpoint >>>
 @app.post("/patch-html")
 async def patch_html(request: PatchRequest):
     try:
-        # Reconstruct the full document structure that the selector expects
         full_html_doc = f'<body><div id="{request.container_id}">{request.html}</div></body>'
         soup = BeautifulSoup(full_html_doc, 'html.parser')
 
-        # Select the parent element within the reconstructed document
         parent_element = soup.select_one(request.parent_selector)
         if not parent_element:
             raise HTTPException(status_code=404, detail=f"Parent selector '{request.parent_selector}' not found in reconstructed document.")
@@ -218,24 +269,18 @@ async def patch_html(request: PatchRequest):
         if not request.new_parent_snippet or not request.new_parent_snippet.strip():
             raise HTTPException(status_code=400, detail="New parent snippet is empty.")
 
-        # Parse the new snippet from the AI
         new_snippet_soup = BeautifulSoup(request.new_parent_snippet, 'html.parser')
         
-        # The AI might return a full HTML doc or just the snippet. Extract the relevant nodes.
         new_contents = new_snippet_soup.body.contents if new_snippet_soup.body else new_snippet_soup.contents
         if not new_contents:
             raise HTTPException(status_code=500, detail="Failed to parse new parent snippet from AI response.")
         
-        # Replace the old parent element with the new one(s)
         parent_element.replace_with(*new_contents)
 
-        # Find the container again in the modified soup
         container_div = soup.select_one(f'#{request.container_id}')
         if not container_div:
-            # This would be an internal error if the container is lost
             raise HTTPException(status_code=500, detail="Container element was lost after patching HTML.")
 
-        # Extract the inner HTML of the container to send back to the client
         body_html = ''.join(str(c) for c in container_div.contents)
         
         return {"html": body_html, "css": request.css, "js": request.js}
@@ -245,7 +290,7 @@ async def patch_html(request: PatchRequest):
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to patch HTML: {str(e)}")
 
-# Uvicorn runner
+# --- Uvicorn runner (Unchanged) ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
