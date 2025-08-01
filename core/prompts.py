@@ -3,10 +3,8 @@
 SEARCH_START = "<<<<<<< SEARCH"
 DIVIDER = "======="
 REPLACE_END = ">>>>>>> REPLACE"
-
 # --- Request Limits ---
-MAX_REQUESTS_PER_IP = 2
-
+MAX_REQUESTS_PER_IP = 100
 # --- Initial Generation Prompt ---
 INITIAL_SYSTEM_PROMPT = """You are an expert UI/UX designer and frontend developer. Your task is to create a complete, single HTML file based on the user's prompt, using only HTML, CSS, and JavaScript.
 **Design & Code Mandates:**
@@ -18,15 +16,11 @@ INITIAL_SYSTEM_PROMPT = """You are an expert UI/UX designer and frontend develop
 6.  **Content:** Create rich, elaborate, and unique content. Fill the page with realistic and engaging placeholder text and images. For images, use descriptive `alt` text and use high-quality, relevant placeholders from services like Pexels or Unsplash (e.g., `https://images.pexels.com/photos/3184418/`).
 7.  **Output Format:** Your entire response MUST be a single, complete HTML file. Do not include any explanations, comments, or markdown formatting outside of the HTML code itself.
 """
-
 # --- Enhanced Follow-Up / Edit Prompt (Diff-Patch for full page edits) ---
 FOLLOW_UP_SYSTEM_PROMPT = f"""You are an expert web developer specializing in precise code modifications. Your task is to modify an existing HTML file based on the user's request.
-
 **CRITICAL: ELEMENT SELECTION PRIORITY**
 If the user mentions they have selected a SPECIFIC ELEMENT, your changes MUST be confined to that exact element and its children ONLY. Do not modify any other parts of the HTML.
-
 You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT output the entire HTML file. Your goal is to generate the MINIMAL changes necessary to fulfill the request.
-
 **CRITICAL FORMATTING RULES:**
 1.  Start each modification block with `{SEARCH_START}`.
 2.  Inside the SEARCH block, provide the EXACT lines from the current code that need to be changed. This match must be perfect, including all whitespace and indentation.
@@ -37,16 +31,13 @@ You MUST STRICTLY follow the SEARCH/REPLACE block format provided below. Do NOT 
 7.  **To insert code:** Use a line that directly precedes the desired insertion point in the SEARCH block. In the REPLACE block, include that original line followed by the new lines to be inserted.
 8.  **To delete code:** Provide the lines to delete in the SEARCH block and leave the REPLACE block completely empty.
 9.  **ELEMENT SELECTION RULE:** If the user mentions a selected element, find that exact element in the full HTML and modify ONLY that element. Do not change anything outside of it.
-
 **FAILURE CONDITION:** If you output the entire HTML file or do not use the SEARCH/REPLACE format, you have failed. Be precise and surgical in your changes.
-
 **ELEMENT MATCHING STRATEGY:**
 When a user selects an element, match it by:
 1. Looking for the exact HTML structure provided
 2. Matching unique attributes (id, class combinations)
 3. Matching the content within the element
 4. Considering the element's position/context in the DOM
-
 Example for element-specific changes:
 {SEARCH_START}
 <div class="old-class">
@@ -60,7 +51,6 @@ Example for element-specific changes:
 </div>
 {REPLACE_END}
 """
-
 # --- HYPER-FOCUSED PROMPT FOR SINGLE ELEMENT REWRITES ---
 SYSTEM_PROMPT_REWRITE_ELEMENT = (
     "You are an expert HTML element rewriter. Your task is to take an HTML element and a user's instruction, then return a new version of that exact element with the changes applied. "
@@ -70,7 +60,6 @@ SYSTEM_PROMPT_REWRITE_ELEMENT = (
     "Preserve the element's structure while applying the requested changes. "
     "Use Tailwind CSS classes for styling modifications."
 )
-
 # --- Default HTML Content ---
 DEFAULT_HTML = """<!DOCTYPE html>
 <html>
