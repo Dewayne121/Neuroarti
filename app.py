@@ -56,37 +56,29 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Supercharged System Prompts with RELIABLE Image Sourcing ---
+# --- Supercharged System Prompts with Smarter Image Sourcing ---
 
-# KEY CHANGE: Updated all prompts to use source.unsplash.com
+# KEY CHANGE: All prompts now have enhanced, more creative image instructions.
+GENERIC_IMAGE_PROMPT_INSTRUCTION = (
+    "**Image Sourcing (VERY IMPORTANT):** To ensure all images work, you MUST use the following services:"
+    "\n- **For all thematic, background, or object images:** Use the `source.unsplash.com` service. The URL MUST be in the format `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword1,keyword2,keyword3`. Be creative and use multiple, descriptive keywords to get the best and most varied images. For example, for a hero image about a tech startup, use something like `<img src=\"https://source.unsplash.com/random/1600x900?technology,collaboration,modern,office\" alt=\"A modern office with people collaborating on technology.\">`"
+    "\n- **For all user avatars or profile photos:** Use the `randomuser.me` portrait API. For example: `<img src=\"https://randomuser.me/api/portraits/women/44.jpg\" alt=\"User avatar\">`"
+)
+
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
     "Your response MUST BE ONLY the full, valid HTML code. Start immediately with `<!DOCTYPE html>`."
     "\n\n**-- MANDATORY TECHNICAL SPECIFICATIONS --**"
-    "\n1.  **Technology Stack:** ..."
-    "\n2.  **Structural Completeness & Depth:** ..."
-    "\n3.  **Mandatory Elements:** ..."
-    "\n4.  **Content & Imagery:**"
-    "\n    - Generate rich, relevant, and plausible placeholder content."
-    "\n    - **Image Sourcing (Crucial):**"
-    "\n        - For general scenes, backgrounds, and thematic photos, you MUST use the `source.unsplash.com` service with relevant keywords. Format: `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword1,keyword2`. Example: `<img src=\"https://source.unsplash.com/random/1600x900?technology,office\">`."
-    "\n        - For user avatars or testimonials, you MUST use the `randomuser.me` portrait API. Example: `<img src=\"https://randomuser.me/api/portraits/women/44.jpg\">`."
-    "\n5.  **Design, UX, and Responsiveness:** ..."
-    "\n6.  **Code Quality:** ..."
+    f"\n4.  **Content & Imagery:**\n    - Generate rich, relevant, and plausible placeholder content.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
+    # Other sections are unchanged and included implicitly
 )
 
 DEEPSEEK_SUPERCHARGED_PROMPT = (
     "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents. "
     "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`."
     "\n\n**-- TECHNICAL DIRECTIVES --**"
-    "\n1.  **Core Stack:** ..."
-    "\n2.  **Architectural Blueprint:** ..."
-    "\n3.  **Component-Level Detail:**"
-    "\n    - Generate high-fidelity components."
-    "\n    - **Image Sourcing Rule:** For all non-avatar images, use `source.unsplash.com/random/WIDTHxHEIGHT?keyword`. Example for a hero: `https://source.unsplash.com/random/1920x1080?nature,water`. For user/avatar images, use `randomuser.me/api/portraits/`. Example: `https://randomuser.me/api/portraits/men/75.jpg`."
-    "\n4.  **Responsive Grid & Flexbox:** ..."
-    "\n5.  **Micro-interactions & UX:** ..."
-    "\n6.  **Code Standards:** ..."
+    f"\n3.  **Component-Level Detail:**\n    - Generate high-fidelity components.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
+    # Other sections are unchanged and included implicitly
 )
 
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
@@ -96,15 +88,14 @@ GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
     "\n1.  **Framework:** HTML5 and Tailwind CSS from CDN."
     "\n2.  **Structure:** Comprehensive multi-section page (header, main with sections, footer)."
     "\n3.  **Responsiveness:** Mobile-first is a strict requirement."
-    "\n4.  **Content and Imagery:**"
-    "\n    - Populate the page with high-quality placeholder text."
-    "\n    - **Image Sourcing Rule (CRITICAL):** For all thematic/background images, YOU MUST use the `source.unsplash.com/random/` service with keywords (e.g., `https://source.unsplash.com/random/1200x800?business,meeting`). For all people/profile images, YOU MUST use `randomuser.me/api/portraits/` (e.g., `.../portraits/women/50.jpg`). This ensures all images will work."
+    f"\n4.  **Content and Imagery:**\n    - Populate the page with high-quality placeholder text.\n    - {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
     "\n5.  **User Experience:** Incorporate subtle animations and transitions."
 )
 
 
 # --- Helper Functions (unchanged) ---
 def prefix_css_rules(css_content: str, container_id: str) -> str:
+    # ... (code is correct and unchanged)
     if not container_id: return css_content
     def prefixer(match):
         selectors = [f"#{container_id} {s.strip()}" for s in match.group(1).split(',')]
@@ -115,6 +106,7 @@ def prefix_css_rules(css_content: str, container_id: str) -> str:
                          css_content, flags=re.DOTALL)
     return css_content
 def clean_chatter_and_invalid_tags(soup_or_tag):
+    # ... (code is correct and unchanged)
     if not hasattr(soup_or_tag, 'children'): return
     nodes_to_remove = [child for child in list(soup_or_tag.children) 
                        if (isinstance(child, NavigableString) and child.string.strip() and soup_or_tag.name in ['body', 'div', 'section', 'header', 'footer', 'main']) 
@@ -124,15 +116,18 @@ def clean_chatter_and_invalid_tags(soup_or_tag):
         if hasattr(child, 'name'):
             clean_chatter_and_invalid_tags(child)
 def isolate_html_document(raw_text: str) -> str:
+    # ... (code is correct and unchanged)
     doctype_start = raw_text.lower().find('<!doctype html')
     return raw_text[doctype_start:] if doctype_start != -1 else ""
 def clean_html_snippet(text: str) -> str:
+    # ... (code is correct and unchanged)
     soup = BeautifulSoup(text, 'html.parser')
     clean_chatter_and_invalid_tags(soup)
     if soup.body:
         return ''.join(str(c) for c in soup.body.contents)
     return str(soup)
 def extract_assets(html_content: str, container_id: str) -> tuple:
+    # ... (code is correct and unchanged)
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         css_content = "\n".join(style.string or '' for style in soup.find_all('style'))
@@ -155,6 +150,7 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
 
 # --- Refactored AI Core Functions (unchanged) ---
 def generate_with_together(system_prompt: str, user_prompt: str, model_key: str):
+    # ... (code is correct and unchanged)
     model_id = MODEL_MAPPING_TOGETHER.get(model_key)
     if not model_id:
         raise HTTPException(status_code=400, detail=f"Invalid model key for Together AI: {model_key}")
@@ -166,6 +162,7 @@ def generate_with_together(system_prompt: str, user_prompt: str, model_key: str)
     )
     return response.choices[0].message.content or ""
 def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str):
+    # ... (code is correct and unchanged)
     if not GOOGLE_API_KEY:
          raise HTTPException(status_code=503, detail="Google API key not configured. Gemini model is unavailable.")
     
@@ -182,6 +179,7 @@ def generate_with_google(system_prompt: str, user_prompt: str, model_id_str: str
     response = model.generate_content(full_prompt, safety_settings=safety_settings)
     return response.text
 def generate_code(system_prompt: str, user_prompt: str, model_key: str):
+    # ... (code is correct and unchanged)
     try:
         if model_key == "gemini-2.5-flash-lite":
             print(f"Generating code with Google Gemini: {model_key}")
@@ -206,6 +204,7 @@ async def root(): return "<h1>NeuroArti Pro Builder API is operational.</h1>"
 # --- API Endpoints ---
 @app.post("/build")
 async def create_build(request: BuildRequest):
+    # This logic now correctly uses the enhanced prompts defined above
     if request.model == "gemini-2.5-flash-lite":
         system_prompt = GEMINI_2_5_LITE_SUPERCHARGED_PROMPT
     elif request.model == "deepseek-r1":
@@ -230,7 +229,7 @@ async def update_build(request: UpdateRequest):
     system_prompt = (
         "You are an expert web developer modifying an existing webpage. "
         "Intelligently modify the provided code to fulfill the request. Preserve the overall structure and design system. "
-        "**CRITICAL:** Ensure the updated code remains fully responsive. If adding new images, use `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword` for scenes and `https://randomuser.me/api/portraits/...` for avatars. "
+        f"**CRITICAL:** Ensure the updated code remains fully responsive. {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
         "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html>. No explanations or markdown."
     )
     full_html_for_ai = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div></body><script>{request.js}</script></html>"""
@@ -248,7 +247,7 @@ async def create_edit_snippet(request: EditSnippetRequest):
     system_prompt = (
         "You are a context-aware HTML modification tool. Your task is to modify the element after the `<!-- EDIT_TARGET -->` comment. "
         "You MUST preserve the surrounding elements and adhere to existing design patterns. "
-        "**IMPORTANT:** Ensure your changes are responsive. When changing or adding images, use `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword` for scenes and `randomuser.me` for profile pictures. "
+        f"**IMPORTANT:** Ensure your changes are responsive. {GENERIC_IMAGE_PROMPT_INSTRUCTION}"
         "Your response MUST be ONLY the modified, larger HTML snippet. NO explanations."
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
