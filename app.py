@@ -56,50 +56,50 @@ MODEL_MAPPING_TOGETHER = {
     "deepseek-r1": "deepseek-ai/DeepSeek-R1-0528-tput" 
 }
 
-# --- Supercharged System Prompts with Image Sourcing ---
+# --- Supercharged System Prompts with RELIABLE Image Sourcing ---
 
-# KEY CHANGE: Updated all three build prompts with specific image instructions.
+# KEY CHANGE: Updated all prompts to use source.unsplash.com
 GLM_SUPERCHARGED_PROMPT = (
     "You are an elite AI web developer. Your task is to create a stunning, complete, and modern webpage based on a user's prompt. "
-    "Your response MUST BE ONLY the full, valid HTML code. Do not include any explanations, markdown like ```html, or comments. Your response must start immediately with `<!DOCTYPE html>`."
+    "Your response MUST BE ONLY the full, valid HTML code. Start immediately with `<!DOCTYPE html>`."
     "\n\n**-- MANDATORY TECHNICAL SPECIFICATIONS --**"
-    "\n1.  **Technology Stack:** ..." # (abbreviated)
-    "\n2.  **Structural Completeness & Depth:** ..." # (abbreviated)
-    "\n3.  **Mandatory Elements:** ..." # (abbreviated)
+    "\n1.  **Technology Stack:** ..."
+    "\n2.  **Structural Completeness & Depth:** ..."
+    "\n3.  **Mandatory Elements:** ..."
     "\n4.  **Content & Imagery:**"
-    "\n    - Generate rich, relevant, and plausible placeholder content (text, headlines, etc.)."
+    "\n    - Generate rich, relevant, and plausible placeholder content."
     "\n    - **Image Sourcing (Crucial):**"
-    "\n        - For general scenes, backgrounds, and product photos, you MUST use specific photo URLs from Unsplash (e.g., `https://images.unsplash.com/photo-1543466835-00a7907e9de1`)."
-    "\n        - For user avatars, profile pictures, or testimonials, you MUST use the `randomuser.me` portrait API (e.g., `<img src=\"https://randomuser.me/api/portraits/women/44.jpg\">` or `.../men/32.jpg`)."
-    "\n5.  **Design, UX, and Responsiveness:** ..." # (abbreviated)
-    "\n6.  **Code Quality:** ..." # (abbreviated)
+    "\n        - For general scenes, backgrounds, and thematic photos, you MUST use the `source.unsplash.com` service with relevant keywords. Format: `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword1,keyword2`. Example: `<img src=\"https://source.unsplash.com/random/1600x900?technology,office\">`."
+    "\n        - For user avatars or testimonials, you MUST use the `randomuser.me` portrait API. Example: `<img src=\"https://randomuser.me/api/portraits/women/44.jpg\">`."
+    "\n5.  **Design, UX, and Responsiveness:** ..."
+    "\n6.  **Code Quality:** ..."
 )
 
 DEEPSEEK_SUPERCHARGED_PROMPT = (
-    "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents based on a user request. "
-    "Your output must be ONLY the raw HTML code. No preamble, no markdown, no explanation. Your entire response begins with `<!DOCTYPE html>`."
+    "You are a top-tier frontend architect AI. Your sole function is to write production-ready, single-file HTML documents. "
+    "Your output must be ONLY the raw HTML code, beginning with `<!DOCTYPE html>`."
     "\n\n**-- TECHNICAL DIRECTIVES --**"
-    "\n1.  **Core Stack:** ..." # (abbreviated)
-    "\n2.  **Architectural Blueprint:** ..." # (abbreviated)
+    "\n1.  **Core Stack:** ..."
+    "\n2.  **Architectural Blueprint:** ..."
     "\n3.  **Component-Level Detail:**"
-    "\n    - Generate high-fidelity components..."
-    "\n    - **Image Sourcing (Crucial):** For hero sections or galleries, use specific photo URLs from Unsplash (`https://images.unsplash.com/...`). For any user/avatar images (like in testimonials), use the `randomuser.me` portrait API (e.g., `https://randomuser.me/api/portraits/men/75.jpg`)."
-    "\n4.  **Responsive Grid & Flexbox:** ..." # (abbreviated)
-    "\n5.  **Micro-interactions & UX:** ..." # (abbreviated)
-    "\n6.  **Code Standards:** ..." # (abbreviated)
+    "\n    - Generate high-fidelity components."
+    "\n    - **Image Sourcing Rule:** For all non-avatar images, use `source.unsplash.com/random/WIDTHxHEIGHT?keyword`. Example for a hero: `https://source.unsplash.com/random/1920x1080?nature,water`. For user/avatar images, use `randomuser.me/api/portraits/`. Example: `https://randomuser.me/api/portraits/men/75.jpg`."
+    "\n4.  **Responsive Grid & Flexbox:** ..."
+    "\n5.  **Micro-interactions & UX:** ..."
+    "\n6.  **Code Standards:** ..."
 )
 
 GEMINI_2_5_LITE_SUPERCHARGED_PROMPT = (
-    "You are a world-class AI developer that specializes in writing clean, modern, and production-ready single-file HTML webpages. "
-    "Your response MUST BE ONLY the full, valid HTML code. Do not include any explanations, markdown like ```html, or any text outside of the `<!DOCTYPE html>` document."
+    "You are a world-class AI developer writing single-file HTML webpages. "
+    "Your response MUST BE ONLY the full, valid HTML code, starting with `<!DOCTYPE html>`."
     "\n\n**-- CORE REQUIREMENTS --**"
-    "\n1.  **Framework:** ..." # (abbreviated)
-    "\n2.  **Structure:** ..." # (abbreviated)
-    "\n3.  **Responsiveness:** ..." # (abbreviated)
+    "\n1.  **Framework:** HTML5 and Tailwind CSS from CDN."
+    "\n2.  **Structure:** Comprehensive multi-section page (header, main with sections, footer)."
+    "\n3.  **Responsiveness:** Mobile-first is a strict requirement."
     "\n4.  **Content and Imagery:**"
-    "\n    - Populate the page with high-quality, relevant placeholder text."
-    "\n    - **Image Sourcing Rule:** For all background or thematic images, use specific URLs from Unsplash (`https://images.unsplash.com/photo-...`). For all people/profile images, use the `randomuser.me` API (`https://randomuser.me/api/portraits/...`)."
-    "\n5.  **User Experience:** ..." # (abbreviated)
+    "\n    - Populate the page with high-quality placeholder text."
+    "\n    - **Image Sourcing Rule (CRITICAL):** For all thematic/background images, YOU MUST use the `source.unsplash.com/random/` service with keywords (e.g., `https://source.unsplash.com/random/1200x800?business,meeting`). For all people/profile images, YOU MUST use `randomuser.me/api/portraits/` (e.g., `.../portraits/women/50.jpg`). This ensures all images will work."
+    "\n5.  **User Experience:** Incorporate subtle animations and transitions."
 )
 
 
@@ -226,12 +226,11 @@ async def create_build(request: BuildRequest):
 
 @app.post("/update")
 async def update_build(request: UpdateRequest):
-    # KEY CHANGE: Added image sourcing rule to update prompt.
+    # KEY CHANGE: Update prompt with reliable image sourcing rules
     system_prompt = (
-        "You are an expert web developer tasked with modifying an existing webpage. "
-        "You will receive the complete HTML, CSS, and JS of the current page, along with a user's request for a high-level change. "
+        "You are an expert web developer modifying an existing webpage. "
         "Intelligently modify the provided code to fulfill the request. Preserve the overall structure and design system. "
-        "**CRITICAL:** Ensure the updated code remains fully responsive. If adding new images, use Unsplash for scenes and `randomuser.me/api/portraits/` for avatars. "
+        "**CRITICAL:** Ensure the updated code remains fully responsive. If adding new images, use `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword` for scenes and `https://randomuser.me/api/portraits/...` for avatars. "
         "Your response MUST be the complete, updated HTML file, starting with <!DOCTYPE html>. No explanations or markdown."
     )
     full_html_for_ai = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>{request.css}</style></head><body><div id="{request.container_id}">{request.html}</div></body><script>{request.js}</script></html>"""
@@ -245,14 +244,12 @@ async def update_build(request: UpdateRequest):
 
 @app.post("/edit-snippet")
 async def create_edit_snippet(request: EditSnippetRequest):
-    # KEY CHANGE: Added image sourcing rule to snippet edit prompt.
+    # KEY CHANGE: Update prompt with reliable image sourcing rules
     system_prompt = (
-        "You are a context-aware HTML modification tool. You will receive an HTML snippet containing a `<!-- EDIT_TARGET -->` comment. "
-        "Your task is to modify the single HTML element immediately following this comment based on the user's instruction. "
-        "You MUST preserve the surrounding parent and sibling elements. Adhere to the existing Tailwind CSS classes and design patterns. "
-        "**IMPORTANT:** Ensure your changes are responsive. When changing or adding images, use Unsplash.com for scenes and `randomuser.me/api/portraits/` for profile pictures. "
-        "Your response MUST be ONLY the modified, larger HTML snippet, with the `<!-- EDIT_TARGET -->` comment removed. "
-        "NO explanations, NO markdown."
+        "You are a context-aware HTML modification tool. Your task is to modify the element after the `<!-- EDIT_TARGET -->` comment. "
+        "You MUST preserve the surrounding elements and adhere to existing design patterns. "
+        "**IMPORTANT:** Ensure your changes are responsive. When changing or adding images, use `https://source.unsplash.com/random/WIDTHxHEIGHT?keyword` for scenes and `randomuser.me` for profile pictures. "
+        "Your response MUST be ONLY the modified, larger HTML snippet. NO explanations."
     )
     user_prompt = f"INSTRUCTION: '{request.prompt}'.\n\nCONTEXTUAL HTML TO MODIFY:\n{request.contextual_snippet}"
     modified_snippet_raw = generate_code(system_prompt, user_prompt, request.model)
