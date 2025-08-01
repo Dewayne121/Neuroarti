@@ -7,12 +7,12 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
-
 from core.ai_services import generate_code
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
+    SYSTEM_PROMPT_REWRITE_ELEMENT, # <-- Import new prompt
     SEARCH_START
 )
 from core.models import MODELS
@@ -23,7 +23,6 @@ from core.utils import (
     isolate_and_clean_html,
     extract_assets
 )
-
 load_dotenv()
 
 class BuildRequest(BaseModel):
@@ -40,8 +39,14 @@ class UpdateRequest(BaseModel):
     container_id: str
     selectedElementHtml: str | None = None
 
-app = FastAPI()
+# New model for the dedicated rewrite endpoint
+class RewriteRequest(BaseModel):
+    prompt: str
+    model: str
+    html: str # Full HTML document for context
+    selectedElementHtml: str # The specific element to be rewritten
 
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,22 +63,17 @@ async def build_or_full_update(request: Request, body: BuildRequest):
     
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
     
     user_prompt = f"My request is: {body.prompt}"
     if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
-
     ai_response_text = await generate_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     clean_html_doc = isolate_and_clean_html(ai_response_text)
-
     if not clean_html_doc:
         raise HTTPException(status_code=500, detail="AI failed to generate valid HTML content.")
-
     container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
     body_html, css, js = extract_assets(clean_html_doc, container_id)
-
     return JSONResponse(content={
         "ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id
     })
@@ -83,57 +83,93 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
-
     if not body.html:
         raise HTTPException(status_code=400, detail="HTML content is required for a patch update.")
     
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-
-    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is: '{body.prompt}'"
     
-    if body.selectedElementHtml and body.selectedElementHtml.strip():
-        user_prompt += f"\n\nIMPORTANT: I have selected a SPECIFIC ELEMENT to modify. Please confine your changes to ONLY this element and its children. Here is the selected element:\n```html\n{body.selectedElementHtml}\n```\n\nYou MUST find this exact element in the full HTML above and modify ONLY this element."
-
+    # This endpoint is now ONLY for global edits, so we construct the prompt accordingly.
+    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
+    
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
-
     soup = BeautifulSoup(body.html, 'html.parser')
     original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
-
     if not patch_instructions or not patch_instructions.strip() or SEARCH_START not in patch_instructions:
         print("Warning: AI returned an invalid patch. No changes applied.")
-        print(f"AI Response: {patch_instructions[:200]}...")
         return JSONResponse(content={
-            "ok": True, 
-            "html": original_body_content, 
-            "css": body.css, 
-            "js": body.js, 
-            "container_id": body.container_id
+            "ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id
         })
-
     try:
         updated_full_html = apply_diff_patch(body.html, patch_instructions)
-        
-        # --- FIX: Re-extract assets from the patched HTML to capture CSS/JS changes ---
         updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
+        return JSONResponse(content={
+            "ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id
+        })
+    except Exception as e:
+        print(f"Error applying patch: {e}")
+        return JSONResponse(content={
+            "ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id
+        })
+
+# --- NEW DEDICATED ENDPOINT FOR ROBUST ELEMENT EDITING ---
+@app.put("/api/rewrite-element")
+async def rewrite_element(request: Request, body: RewriteRequest):
+    ip = request.client.host
+    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
+        return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
+    if body.model not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid model selected")
+    if not body.html or not body.selectedElementHtml:
+        raise HTTPException(status_code=400, detail="HTML content and a selected element are required for a rewrite.")
+
+    # Create a focused prompt for the AI
+    user_prompt_for_ai = (
+        f"**Original HTML Element:**\n```html\n{body.selectedElementHtml}\n```\n\n"
+        f"**User's Instruction:**\n'{body.prompt}'\n\n"
+        "Rewrite the element above to fulfill the user's instruction."
+    )
+
+    try:
+        # Get the rewritten HTML from the AI
+        rewritten_element_html = await generate_code(
+            SYSTEM_PROMPT_REWRITE_ELEMENT,
+            user_prompt_for_ai,
+            body.model
+        )
+        
+        # Clean up the AI response to ensure it's just the element
+        rewritten_element_html = isolate_and_clean_html(rewritten_element_html)
+
+        if not rewritten_element_html.strip():
+             raise HTTPException(status_code=500, detail="AI returned an empty element.")
+
+        # Directly and reliably replace the original element in the full HTML
+        # This is more robust than a diff-patch for this specific task
+        updated_full_html = body.html.replace(body.selectedElementHtml, rewritten_element_html, 1)
+
+        # Re-extract all assets from the newly modified document
+        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id") # container_id isn't used here
 
         return JSONResponse(content={
             "ok": True,
             "html": updated_body_content,
             "css": updated_css,
             "js": updated_js,
-            "container_id": body.container_id
+            "container_id": "some-id" # Not critical for this response but good to have
         })
-        
+
     except Exception as e:
-        print(f"Error applying patch: {e}")
+        print(f"Error during element rewrite: {e}")
+        soup = BeautifulSoup(body.html, 'html.parser')
+        original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
         return JSONResponse(content={
             "ok": True,
             "html": original_body_content,
-            "css": body.css,
-            "js": body.js,
-            "container_id": body.container_id
-        })
+            "css": "",
+            "js": ""
+        }, status_code=500)
+
 
 if __name__ == "__main__":
     import uvicorn
