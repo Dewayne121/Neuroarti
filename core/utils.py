@@ -74,41 +74,52 @@ def isolate_and_clean_html(raw_text: str) -> str:
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    More robustly extracts the first HTML element from a potentially messy AI response,
+    More robustly extracts the first valid HTML element from a potentially messy AI response,
     handling markdown fences and extra chatter.
     """
     if not raw_text:
         return ""
-    
-    cleaned_text = raw_text
-    
-    # Prioritize finding markdown code blocks, as AIs use them often
-    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', cleaned_text, re.DOTALL)
-    if markdown_match:
-        cleaned_text = markdown_match.group(1).strip()
-    else:
-        # Fallback to just finding the first tag if no markdown found
-        tag_match = re.search(r'<([a-zA-Z0-9]+)', cleaned_text)
-        if tag_match:
-            start_index = tag_match.start()
-            cleaned_text = cleaned_text[start_index:]
-        else:
-            return "" # No HTML tag found
 
-    # Use BeautifulSoup to parse the cleaned text and extract the first element
+    text_to_parse = raw_text
+
+    # 1. Prioritize finding markdown code blocks.
+    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', text_to_parse, re.DOTALL)
+    if markdown_match:
+        text_to_parse = markdown_match.group(1).strip()
+    else:
+        # 2. If no markdown, find the first plausible *structural* HTML tag to avoid chatter tags like <think>.
+        # This is a more aggressive cleaning step.
+        tag_match = re.search(r'<([a-zA-Z]+[0-9]?)', text_to_parse)
+        if tag_match:
+             first_tag_name = tag_match.group(1)
+             # A simple heuristic: if the first tag is not a standard one, it might be chatter.
+             plausible_tags = ['div', 'section', 'header', 'footer', 'main', 'article', 'aside', 'ul', 'form', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'nav']
+             if first_tag_name.lower() not in plausible_tags:
+                  # Try to find the start of a more plausible tag later in the string
+                  better_match = re.search(r'<(?:' + '|'.join(plausible_tags) + r')', text_to_parse, re.IGNORECASE)
+                  if better_match:
+                       text_to_parse = text_to_parse[better_match.start():]
+             else:
+                  text_to_parse = text_to_parse[tag_match.start():]
+        else:
+            return "" # No HTML tags found at all
+
+    # 3. Use BeautifulSoup to parse the cleaned text and extract ONLY the first valid element.
     try:
-        soup = BeautifulSoup(cleaned_text, 'html.parser')
+        soup = BeautifulSoup(text_to_parse, 'html.parser')
         
-        # Find the first child that is a tag, ignoring NavigableString
-        first_element = soup.find(lambda tag: tag.name is not None)
+        # Find the first child that is a tag, ignoring NavigableString and document tags.
+        first_element = soup.find(lambda tag: tag.name is not None and tag.name not in ['html', 'body', 'head'])
 
         if first_element:
             return str(first_element)
         else:
-            return "" # No element found after parsing
+            print("Warning: No valid first element found by BeautifulSoup.")
+            return ""
     except Exception as e:
         print(f"Error parsing with BeautifulSoup in extract_first_html_element: {e}")
-        return cleaned_text # Return the best guess if parsing fails
+        # As a last resort, return the best text we found, but this might contain errors.
+        return text_to_parse
 
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
