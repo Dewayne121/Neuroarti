@@ -17,7 +17,7 @@ if GOOGLE_API_KEY:
 # --- Private functions for each API ---
 async def _generate_with_together(system_prompt: str, user_prompt: str, model_api_id: str):
     try:
-        # FIX: Changed from .create to the asynchronous .acreate
+        # FIX: Changed from .create to the asynchronous .create
         response = await together_client.chat.completions.create(
             model=model_api_id,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
