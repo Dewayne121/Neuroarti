@@ -6,9 +6,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 from core.ai_services import generate_code
+from core.singular_element_service import rewrite_singular_element
+from core.complex_element_service import rewrite_complex_element
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
@@ -21,7 +23,8 @@ from core.utils import (
     is_the_same_html,
     apply_diff_patch,
     isolate_and_clean_html,
-    extract_assets
+    extract_assets,
+    is_singular_element
 )
 
 load_dotenv()
@@ -38,7 +41,11 @@ class UpdateRequest(BaseModel):
     css: str
     js: str
     container_id: str
-    selectedElementHtml: str | None = None # This is now optional for the unified endpoint
+
+class RewriteRequest(BaseModel):
+    prompt: str
+    model: str
+    selectedElementHtml: str
 
 app = FastAPI()
 
@@ -70,7 +77,7 @@ async def build_or_full_update(request: Request, body: BuildRequest):
     return JSONResponse(content={"ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id})
 
 @app.put("/api/ask-ai")
-async def unified_diff_patch_update(request: Request, body: UpdateRequest):
+async def diff_patch_update(request: Request, body: UpdateRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
@@ -78,41 +85,51 @@ async def unified_diff_patch_update(request: Request, body: UpdateRequest):
         raise HTTPException(status_code=400, detail="HTML content is required.")
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-
-    # --- Inspired by deepsite-v2: Construct a context-rich prompt ---
-    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\n"
-
-    if body.selectedElementHtml:
-        # If an element is selected, give the AI forceful, specific instructions
-        user_prompt += (
-            "CRITICAL INSTRUCTION: The user has selected a specific element to modify. "
-            "You MUST confine your changes to ONLY this element and its children. "
-            f"Here is the selected element:\n```html\n{body.selectedElementHtml}\n```\n\n"
-            f"The user's request for this specific element is: '{body.prompt}'"
-        )
-    else:
-        # If no element is selected, it's a global update request
-        user_prompt += f"My request for a global page update is: '{body.prompt}'"
-
+    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
-    
     soup = BeautifulSoup(body.html, 'html.parser')
     original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
-    
     if not patch_instructions or SEARCH_START not in patch_instructions:
-        print("Warning: AI returned an invalid or empty patch. No changes applied.")
         return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
+    try:
+        updated_full_html = apply_diff_patch(body.html, patch_instructions)
+        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
+        return JSONResponse(content={"ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id})
+    except Exception as e:
+        print(f"Error applying patch: {e}")
+        return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
+
+@app.put("/api/rewrite-element")
+async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
+    ip = request.client.host
+    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
+        return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
+    if body.model not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid model selected")
+    if not body.selectedElementHtml:
+        raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
     
-    updated_full_html = apply_diff_patch(body.html, patch_instructions)
-    updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
-    
-    return JSONResponse(content={
-        "ok": True, 
-        "html": updated_body_content, 
-        "css": updated_css, 
-        "js": updated_js, 
-        "container_id": body.container_id
-    })
+    try:
+        # The main endpoint now acts as a smart router
+        if is_singular_element(body.selectedElementHtml):
+            # Use the service dedicated to simple tags
+            rewritten_html = await rewrite_singular_element(
+                prompt=body.prompt,
+                selected_element_html=body.selectedElementHtml,
+                model=body.model
+            )
+        else:
+            # Use the service dedicated to complex components
+            rewritten_html = await rewrite_complex_element(
+                prompt=body.prompt,
+                selected_element_html=body.selectedElementHtml,
+                model=body.model
+            )
+            
+        return JSONResponse(content={"ok": True, "rewrittenHtml": rewritten_html})
+    except Exception as e:
+        print(f"Error during element rewrite: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
