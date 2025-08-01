@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from bs4 import BeautifulSoup
 
-# Corrected imports
 from core.ai_services import generate_code
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
@@ -25,12 +25,10 @@ from core.utils import (
 
 load_dotenv()
 
-# --- Pydantic Models ---
 class BuildRequest(BaseModel):
     prompt: str
     model: str
     html: str | None = None
-    redesignMarkdown: str | None = None
 
 class UpdateRequest(BaseModel):
     html: str
@@ -59,16 +57,11 @@ async def build_or_full_update(request: Request, body: BuildRequest):
 
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
     
-    user_prompt = ""
-    if body.redesignMarkdown:
-        user_prompt = f"Here is my current design as a markdown:\n\n{body.redesignMarkdown}\n\nNow, please create a new design based on this markdown."
-    elif html_context:
+    user_prompt = f"My request is: {body.prompt}"
+    if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
-    else:
-        user_prompt = body.prompt
 
     ai_response_text = await generate_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
-    
     clean_html_doc = isolate_and_clean_html(ai_response_text)
 
     if not clean_html_doc:
@@ -78,13 +71,8 @@ async def build_or_full_update(request: Request, body: BuildRequest):
     body_html, css, js = extract_assets(clean_html_doc, container_id)
 
     return JSONResponse(content={
-        "ok": True,
-        "html": body_html,
-        "css": css,
-        "js": js,
-        "container_id": container_id
+        "ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id
     })
-
 
 @app.put("/api/ask-ai")
 async def diff_patch_update(request: Request, body: UpdateRequest):
@@ -105,14 +93,17 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
 
     if not patch_instructions or SEARCH_START not in patch_instructions:
-        print("Warning: AI returned an invalid or empty patch. No changes will be applied.")
-        return JSONResponse(content={"ok": True, "html": body.html})
+        print("Warning: AI returned an invalid patch. No changes applied.")
+        # Return the original HTML body content to prevent errors
+        soup = BeautifulSoup(body.html, 'html.parser')
+        body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+        return JSONResponse(content={"ok": True, "html": body_content})
 
-    # The diff-patch logic now only modifies the body content, not the full document
-    soup = BeautifulSoup(body.html, 'html.parser')
-    body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
+    updated_full_html = apply_diff_patch(body.html, patch_instructions)
     
-    updated_body_content = apply_diff_patch(body_content, patch_instructions)
+    # THE CRITICAL FIX: Re-parse the result and extract ONLY the inner content of the body.
+    soup = BeautifulSoup(updated_full_html, 'html.parser')
+    updated_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else ""
 
     return JSONResponse(content={"ok": True, "html": updated_body_content})
 
