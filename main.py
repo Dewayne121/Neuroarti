@@ -13,7 +13,7 @@ from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_SURGICAL_EDIT, # Import the new prompt
+    SYSTEM_PROMPT_SURGICAL_EDIT,
     SEARCH_START
 )
 from core.models import MODELS
@@ -43,7 +43,7 @@ class UpdateRequest(BaseModel):
 class RewriteRequest(BaseModel):
     prompt: str
     model: str
-    html: str # The full page HTML is now required
+    html: str
     selectedElementHtml: str
 
 app = FastAPI()
@@ -87,7 +87,6 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
     patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
     if not patch_instructions or SEARCH_START not in patch_instructions:
-        # Fallback to original content if patch is invalid
         soup = BeautifulSoup(body.html, 'html.parser')
         original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
         return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
@@ -100,45 +99,34 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
-    if body.model not in MODELS:
-        raise HTTPException(status_code=400, detail="Invalid model selected")
     if not body.html or not body.selectedElementHtml:
         raise HTTPException(status_code=400, detail="Full HTML and a selected element are required.")
     
     try:
-        # --- The "Surgical Marker" Method ---
-        # 1. Parse the selected element to add a marker.
-        soup = BeautifulSoup(body.selectedElementHtml, 'html.parser')
-        selected_tag = soup.find(lambda tag: isinstance(tag, Tag))
-        if not selected_tag:
-            raise HTTPException(status_code=400, detail="Invalid selected element HTML.")
+        # --- Robust "Surgical Marker" Method ---
+        full_soup = BeautifulSoup(body.html, 'html.parser')
         
-        # This is the original string we need to find and replace.
-        original_tag_str = str(selected_tag)
-        
-        # Add our marker attribute.
-        selected_tag['data-neuro-edit-target'] = 'true'
-        marked_tag_with_attr = str(selected_tag)
+        # Find the target element within the full document using its string representation
+        # This is more robust than a simple string.replace()
+        target_element = full_soup.find(lambda tag: str(tag) == body.selectedElementHtml)
 
-        # Reliably replace the original element with the marked one in the full HTML.
-        if original_tag_str not in body.html:
-             raise Exception("The selected element could not be found in the full HTML document.")
-        marked_full_html = body.html.replace(original_tag_str, marked_tag_with_attr, 1)
+        if not target_element:
+            raise Exception("The selected element could not be found in the full HTML document.")
 
-        # 2. Create the user prompt for the AI.
+        target_element['data-neuro-edit-target'] = 'true'
+        marked_full_html = str(full_soup)
+
         user_prompt_for_ai = (
             f"**Full HTML Document:**\n```html\n{marked_full_html}\n```\n\n"
             f"**User's Instruction:**\n'{body.prompt}'\n\n"
         )
 
-        # 3. Call the AI with the new surgical prompt.
         ai_response_text = await generate_code(
             SYSTEM_PROMPT_SURGICAL_EDIT,
             user_prompt_for_ai,
             body.model
         )
 
-        # 4. Clean the response and extract assets.
         updated_full_html = isolate_and_clean_html(ai_response_text)
         if not updated_full_html:
             raise Exception("AI returned an empty or invalid full HTML document.")
@@ -146,10 +134,7 @@ async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
         updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, "some-id")
 
         return JSONResponse(content={
-            "ok": True,
-            "html": updated_body_content,
-            "css": updated_css,
-            "js": updated_js
+            "ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js
         })
 
     except Exception as e:
