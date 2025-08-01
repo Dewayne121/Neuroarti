@@ -39,99 +39,103 @@ def apply_diff_patch(original_html: str, ai_response: str) -> str:
     
     print(f"Found {len(matches)} SEARCH/REPLACE blocks to process")
     
-    # Process matches in reverse order to avoid position shifts
     for i, match in enumerate(reversed(matches)):
         search_block, replace_block = match.group(1), match.group(2)
-        
-        # Clean up the blocks
         search_block = search_block.strip('\n')
         replace_block = replace_block.strip('\n')
         
-        print(f"Processing block {len(matches)-i}: Search for '{search_block[:50]}...'")
-        
         if search_block.strip() == "":
-            # Insert at the beginning
             modified_html = replace_block + "\n" + modified_html
-            print("  -> Inserted at beginning")
         else:
             if search_block in modified_html:
-                # Apply the replacement
-                old_html = modified_html
                 modified_html = modified_html.replace(search_block, replace_block, 1)
-                if modified_html != old_html:
-                    print("  -> Successfully applied replacement")
-                else:
-                    print("  -> Replacement had no effect")
             else:
-                print(f"  -> Warning: Search block not found in HTML")
-                # Try a more flexible search (ignoring some whitespace differences)
-                search_normalized = ' '.join(search_block.split())
-                html_normalized = ' '.join(modified_html.split())
-                if search_normalized in html_normalized:
-                    print("  -> Attempting flexible whitespace matching")
-                    # This is a more complex case - for now, skip it
-                    pass
-                else:
-                    print(f"  -> Skipping this block entirely")
+                print(f"  -> Warning: Search block not found in HTML for block {len(matches)-i}")
     
     return modified_html
 
 def isolate_and_clean_html(raw_text: str) -> str:
-    """Finds the start of the HTML document and removes any preceding text (AI chatter)."""
+    """Finds the start of a FULL HTML document and removes any preceding text."""
     if not raw_text: 
         return ""
-        
     # Look for DOCTYPE declaration first
     match = re.search(r'<!DOCTYPE html>', raw_text, re.IGNORECASE)
     if match: 
         return raw_text[match.start():]
-        
     # Fall back to html tag
     match = re.search(r'<html', raw_text, re.IGNORECASE)
     if match: 
         return raw_text[match.start():]
-        
     # Last resort - look for any opening tag that might start the content
     match = re.search(r'<(?:div|section|header|main|body)', raw_text, re.IGNORECASE)
     if match:
         return raw_text[match.start():]
-        
     return ""
+
+def extract_first_html_element(raw_text: str) -> str:
+    """
+    More robustly extracts the first HTML element from a potentially messy AI response,
+    handling markdown fences and extra chatter.
+    """
+    if not raw_text:
+        return ""
+    
+    cleaned_text = raw_text
+    
+    # Prioritize finding markdown code blocks, as AIs use them often
+    markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', cleaned_text, re.DOTALL)
+    if markdown_match:
+        cleaned_text = markdown_match.group(1).strip()
+    else:
+        # Fallback to just finding the first tag if no markdown found
+        tag_match = re.search(r'<([a-zA-Z0-9]+)', cleaned_text)
+        if tag_match:
+            start_index = tag_match.start()
+            cleaned_text = cleaned_text[start_index:]
+        else:
+            return "" # No HTML tag found
+
+    # Use BeautifulSoup to parse the cleaned text and extract the first element
+    try:
+        soup = BeautifulSoup(cleaned_text, 'html.parser')
+        
+        # Find the first child that is a tag, ignoring NavigableString
+        first_element = soup.find(lambda tag: tag.name is not None)
+
+        if first_element:
+            return str(first_element)
+        else:
+            return "" # No element found after parsing
+    except Exception as e:
+        print(f"Error parsing with BeautifulSoup in extract_first_html_element: {e}")
+        return cleaned_text # Return the best guess if parsing fails
+
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     """Extracts CSS, JS, and body content from a full HTML document, REMOVING COMMENTS."""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Extract CSS
         css_parts = []
         for style in soup.find_all('style'):
             if style.string:
                 css_parts.append(style.string)
         css = "\n".join(css_parts)
         
-        # Extract JS (only inline scripts, not external ones)
         js_parts = []
         for script in soup.find_all('script'):
-            # Only include scripts with content and no src attribute
             if script.string and not script.get('src'):
                 js_parts.append(script.string)
         js = "\n".join(js_parts)
         
-        # Extract body content
         body_tag = soup.find('body')
         if body_tag:
-            # Remove all comments from the body
             for comment in body_tag.find_all(string=lambda text: isinstance(text, Comment)):
                 comment.extract()
-            
-            # Remove style and script tags from body (they're extracted separately)
             for tag in body_tag.find_all(['style', 'script']):
                 tag.decompose()
-            
             body_html = ''.join(str(c) for c in body_tag.contents)
         else:
-            # Fallback if no body tag found
             body_html = html_content
         
         return body_html.strip(), css.strip(), js.strip()
