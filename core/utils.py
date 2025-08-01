@@ -21,6 +21,7 @@ def is_the_same_html(current_html: str) -> bool:
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
         return ' '.join(soup.get_text(strip=True).split())
+    
     return normalize(DEFAULT_HTML) == normalize(current_html)
 
 def apply_diff_patch(original_html: str, ai_response: str) -> str:
@@ -54,76 +55,54 @@ def isolate_and_clean_html(raw_text: str) -> str:
     """Finds the start of a FULL HTML document and removes any preceding text."""
     if not raw_text: 
         return ""
+    
     match = re.search(r'<!DOCTYPE html>', raw_text, re.IGNORECASE)
     if match: 
         return raw_text[match.start():]
+    
     match = re.search(r'<html', raw_text, re.IGNORECASE)
     if match: 
         return raw_text[match.start():]
+    
     match = re.search(r'<(?:div|section|header|main|body)', raw_text, re.IGNORECASE)
     if match:
         return raw_text[match.start():]
+    
     return ""
 
 def extract_first_html_element(raw_text: str) -> str:
     """
-    Extracts the first complete HTML element from an AI response.
-    Improved to handle cases where AI returns extra text or explanations.
+    Definitively extracts the first complete HTML element from an AI response
+    using a simple and robust parsing strategy.
     """
     if not raw_text:
         return ""
     
     text_to_parse = raw_text.strip()
     
-    # Step 1: Look for markdown code blocks first
+    # Step 1: Prioritize markdown code blocks.
     markdown_match = re.search(r'```(?:html)?\n(.*?)\n```', text_to_parse, re.DOTALL)
     if markdown_match:
         text_to_parse = markdown_match.group(1).strip()
+    else:
+        # Step 2: If no markdown, find the start of the first HTML tag and discard any preceding chatter.
+        first_tag_match = re.search(r'<', text_to_parse)
+        if first_tag_match:
+            text_to_parse = text_to_parse[first_tag_match.start():]
+        else:
+            return "" # No HTML tags found.
     
-    # Step 2: Find the first HTML tag
-    first_tag_match = re.search(r'<([a-z][a-z0-9]*)', text_to_parse, re.IGNORECASE)
-    if not first_tag_match:
-        return ""
-    
-    tag_name = first_tag_match.group(1).lower()
-    start_pos = first_tag_match.start()
-    
-    # Step 3: Extract the complete element
+    # Step 3: Use BeautifulSoup's find() method to directly get the first tag.
     try:
-        # Use BeautifulSoup to parse the HTML
-        soup = BeautifulSoup(text_to_parse[start_pos:], 'html.parser')
-        
-        # Find the first tag that matches our tag name
-        first_element = None
-        for tag in soup.find_all(lambda tag: isinstance(tag, Tag)):
-            if tag.name.lower() == tag_name:
-                first_element = tag
-                break
+        soup = BeautifulSoup(text_to_parse, 'html.parser')
+        first_element = soup.find(lambda tag: isinstance(tag, Tag))
         
         if first_element:
-            # Return the complete HTML element
             return str(first_element)
+        return ""
     except Exception as e:
         print(f"Error during BeautifulSoup parsing in extract_first_html_element: {e}")
-    
-    # Fallback: Try to extract using regex
-    try:
-        # For self-closing tags
-        if tag_name in ['img', 'br', 'hr', 'input', 'link', 'meta']:
-            pattern = re.compile(rf'<{tag_name}[^>]*?(?:\/>|>)', re.IGNORECASE)
-            match = pattern.search(text_to_parse[start_pos:])
-            if match:
-                return match.group(0)
-        
-        # For regular tags with content
-        pattern = re.compile(rf'<{tag_name}[^>]*>.*?</{tag_name}>', re.DOTALL | re.IGNORECASE)
-        match = pattern.search(text_to_parse[start_pos:])
-        if match:
-            return match.group(0)
-    except Exception as e:
-        print(f"Error during regex extraction in extract_first_html_element: {e}")
-    
-    return ""
+        return ""
 
 def extract_assets(html_content: str, container_id: str) -> tuple:
     """Extracts CSS, JS, and body content from a full HTML document, REMOVING COMMENTS."""
@@ -144,8 +123,10 @@ def extract_assets(html_content: str, container_id: str) -> tuple:
         
         body_tag = soup.find('body')
         if body_tag:
+            # Remove comments
             for comment in body_tag.find_all(string=lambda text: isinstance(text, Comment)):
                 comment.extract()
+            # Remove style and script tags from body
             for tag in body_tag.find_all(['style', 'script']):
                 tag.decompose()
             body_html = ''.join(str(c) for c in body_tag.contents)
