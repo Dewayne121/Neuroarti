@@ -12,7 +12,8 @@ from core.ai_services import generate_code
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
-    FOLLOW_UP_SYSTEM_PROMPT
+    FOLLOW_UP_SYSTEM_PROMPT,
+    SEARCH_START
 )
 from core.models import MODELS
 from core.utils import (
@@ -33,7 +34,7 @@ class BuildRequest(BaseModel):
 class UpdateRequest(BaseModel):
     prompt: str
     model: str
-    html: str # Full HTML document for context
+    html: str
     css: str
     js: str
     container_id: str
@@ -107,13 +108,12 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
     soup = BeautifulSoup(updated_full_html, 'html.parser')
     updated_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else ""
 
-    # THE CRITICAL FIX: Return the complete state, including the container_id we received.
     return JSONResponse(content={
         "ok": True,
         "html": updated_body_content,
-        "css": body.css, # CSS and JS are not modified in a patch
+        "css": body.css,
         "js": body.js,
-        "container_id": body.container_id # Pass the ID back to the frontend
+        "container_id": body.container_id
     })
 
 if __name__ == "__main__":
