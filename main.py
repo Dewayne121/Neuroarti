@@ -21,7 +21,8 @@ from core.utils import (
     is_the_same_html,
     apply_diff_patch,
     isolate_and_clean_html,
-    extract_assets
+    extract_assets,
+    extract_first_html_element # <-- Import the new function
 )
 load_dotenv()
 
@@ -38,11 +39,10 @@ class UpdateRequest(BaseModel):
     js: str
     container_id: str
 
-# New, simpler model for the rewrite endpoint
 class RewriteRequest(BaseModel):
     prompt: str
     model: str
-    selectedElementHtml: str # The specific element to be rewritten
+    selectedElementHtml: str
 
 app = FastAPI()
 app.add_middleware(
@@ -109,7 +109,6 @@ async def diff_patch_update(request: Request, body: UpdateRequest):
             "ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id
         })
 
-# --- RE-ARCHITECTED ENDPOINT FOR RELIABLE ELEMENT EDITING ---
 @app.put("/api/rewrite-element")
 async def rewrite_element(request: Request, body: RewriteRequest):
     ip = request.client.host
@@ -120,7 +119,6 @@ async def rewrite_element(request: Request, body: RewriteRequest):
     if not body.selectedElementHtml:
         raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
 
-    # Create the forceful, focused prompt for the AI to rewrite a single element
     user_prompt_for_ai = (
         f"**Original HTML Element:**\n```html\n{body.selectedElementHtml}\n```\n\n"
         f"**User's Instruction to change it:**\n'{body.prompt}'\n\n"
@@ -129,16 +127,17 @@ async def rewrite_element(request: Request, body: RewriteRequest):
     )
 
     try:
-        # Get the rewritten HTML from the AI
-        rewritten_element_html = await generate_code(
+        ai_response_text = await generate_code(
             SYSTEM_PROMPT_REWRITE_ELEMENT,
             user_prompt_for_ai,
             body.model
         )
         
-        rewritten_element_html = isolate_and_clean_html(rewritten_element_html)
+        # Use the new, more robust extraction function
+        rewritten_element_html = extract_first_html_element(ai_response_text)
+        
         if not rewritten_element_html.strip():
-             raise HTTPException(status_code=500, detail="AI returned an empty element.")
+             raise HTTPException(status_code=500, detail="AI returned an empty or invalid element.")
 
         return JSONResponse(content={
             "ok": True,
