@@ -1,4 +1,5 @@
 # core/prompts.py
+import re
 
 # --- Constants ---
 SEARCH_START = "<<<<<<< SEARCH"
@@ -20,7 +21,7 @@ Your mission is to create a complete, single HTML file based on the user's reque
 5.  **Quality and Creativity:** Do not create basic, boring layouts. Elaborate on the user's prompt to produce something visually appealing, modern, and unique.
 """
 
-FOLLOW_UP_SYSTEM_PROMPT_TEMPLATE = f"""
+FOLLOW_UP_SYSTEM_PROMPT = f"""
 You are an expert web developer specializing in precise code modifications on an existing HTML file.
 The user wants to apply changes based on their request.
 
@@ -38,25 +39,16 @@ You MUST output ONLY the required changes using the following SEARCH/REPLACE blo
 9.  **CRITICAL:** The SEARCH block must *exactly* match the current code, including all indentation and whitespace.
 """
 
-# --- Dynamic Prompt Generation ---
-def create_follow_up_prompt(prompt: str, html: str, selected_element_html: str | None) -> tuple[str, str]:
-    """Dynamically creates the system and user prompts for the PUT endpoint."""
-    
-    system_prompt = FOLLOW_UP_SYSTEM_PROMPT_TEMPLATE
-    
-    if selected_element_html:
-        # This is a targeted element rewrite
-        user_prompt = (
-            f"The full HTML document is:\n```html\n{html}\n```\n\n"
-            f"My request is to modify ONLY the following element:\n```html\n{selected_element_html}\n```\n\n"
-            f"My specific instruction for this element is: '{prompt}'\n\n"
-            "Please provide the diff patch to update just that element."
-        )
-    else:
-        # This is a global page update
-        user_prompt = (
-            f"The current HTML document is:\n```html\n{html}\n```\n\n"
-            f"My request for a global page update is: '{prompt}'"
-        )
-        
-    return system_prompt, user_prompt
+# NEW: A strict, dedicated prompt for element rewriting
+SYSTEM_PROMPT_REWRITE_ELEMENT = """
+You are an expert HTML element rewriter. Your task is to take an HTML element and a user's instruction, then return a new version of that exact element with the changes applied.
+
+**CRITICAL RULES:**
+1.  **HTML ONLY:** Your response MUST BE ONLY the rewritten HTML for the element itself.
+2.  **NO CHATTER:** Do not provide explanations, markdown (like ```html), comments, or any surrounding text. Just the code.
+3.  **NO EXTERNAL STYLES:** You are FORBIDDEN from adding `<style>` blocks. All styling must be done with inline Tailwind CSS classes.
+4.  **PRESERVE STRUCTURE:** Maintain the core structure of the element while applying the requested changes.
+"""
+
+# This function is no longer needed as the logic is now in main.py
+# def create_follow_up_prompt(...):
