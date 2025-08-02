@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import AsyncGenerator
 from bs4 import BeautifulSoup
 from core.ai_services import generate_code, stream_code
-# No longer using element_rewriter, logic is now unified here
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
@@ -48,7 +47,6 @@ app.add_middleware(
 )
 
 async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None]:
-    # ... (no changes to this function)
     ai_stream = await ai_stream_coroutine
     buffer = ""
     html_started = False
@@ -57,9 +55,12 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
         if html_ended: continue
         buffer += chunk
         if not html_started:
-            match = re.search(r'<!DOCTYPE html>', buffer, re.IGNORECASE)
+            # FIXED: Made the regex more flexible to find either <!DOCTYPE html> or <html>
+            # This robustly handles cases where the AI omits the doctype.
+            match = re.search(r'<!DOCTYPE html>|<html.*?>', buffer, re.IGNORECASE | re.DOTALL)
             if match:
                 html_started = True
+                # This slice correctly removes any chatter before the start of the HTML
                 content_to_yield = buffer[match.start():]
                 buffer = ""
                 yield content_to_yield
@@ -80,7 +81,6 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
 
 @app.post("/api/ask-ai")
 async def ask_ai_post(request: Request, body: AskAiPostRequest):
-    # ... (no changes to this function)
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP): raise HTTPException(status_code=429, detail="Rate limit exceeded.")
     if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
@@ -92,7 +92,6 @@ async def ask_ai_post(request: Request, body: AskAiPostRequest):
     ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     return StreamingResponse(stream_html_generator(ai_stream_coro), media_type="text/plain; charset=utf-8")
 
-
 @app.put("/api/ask-ai")
 async def ask_ai_put(request: Request, body: AskAiPutRequest):
     ip = request.client.host
@@ -101,13 +100,11 @@ async def ask_ai_put(request: Request, body: AskAiPutRequest):
     if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
     
     try:
-        # --- NEW: Unified Diff-Patch Logic (Inspired by DeepSite) ---
         user_prompt = ""
 
         if body.elementIdToReplace and body.selectedElementHtml:
             # Case 1: Targeted Element Rewrite
             print(f"INFO: Handling targeted element update for ID: {body.elementIdToReplace}")
-            # This prompt structure forces the AI to focus only on the selected element within the full context.
             user_prompt = (
                 "You are modifying a single element within an existing HTML file based on the user's request.\n\n"
                 f"The FULL current HTML code is: \n```html\n{body.html}\n```\n\n"
@@ -123,22 +120,16 @@ async def ask_ai_put(request: Request, body: AskAiPutRequest):
                 f"My request for a global page update is: '{body.prompt}'"
             )
         
-        # Get the patch instructions from the AI
         patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
         
-        # Clean the AI response to remove any chatter before the patch block
         patch_start_index = patch_instructions.find(SEARCH_START)
         if patch_start_index == -1:
             raise Exception("AI response did not contain a valid SEARCH/REPLACE block. Update failed.")
         
-        # Isolate just the patch block(s)
         cleaned_patch = patch_instructions[patch_start_index:]
         
-        # Apply the patch to the original HTML
         updated_html = apply_diff_patch(body.html, cleaned_patch)
 
-        # Final cleanup: If the temp ID somehow survived the replacement, remove it.
-        # This makes the process resilient.
         if body.elementIdToReplace:
             soup = BeautifulSoup(updated_html, 'lxml')
             target_element = soup.find(id=body.elementIdToReplace)
