@@ -1,8 +1,22 @@
+# requirements.txt
+
+# Core web framework
 fastapi
 uvicorn[standard]
+
+# AI model clients
 openai
-python-dotenv
-beautifulsoup4
 google-generativeai
-requests
+
+# Environment variable management
+python-dotenv
+
+# Data validation for FastAPI
 pydantic
+
+# Robust HTML parsing (Required for editing)
+beautifulsoup4
+lxml
+
+# General HTTP requests (good to have)
+requests
