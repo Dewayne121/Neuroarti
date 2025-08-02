@@ -10,14 +10,12 @@ from typing import AsyncGenerator
 from bs4 import BeautifulSoup
 from core.ai_services import generate_code, stream_code
 from core.prompts import (
-    MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
     FOLLOW_UP_SYSTEM_PROMPT,
     SEARCH_START
 )
 from core.models import MODELS
 from core.utils import (
-    ip_limiter,
     is_the_same_html,
     apply_diff_patch,
 )
@@ -55,12 +53,9 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
         if html_ended: continue
         buffer += chunk
         if not html_started:
-            # FIXED: Made the regex more flexible to find either <!DOCTYPE html> or <html>
-            # This robustly handles cases where the AI omits the doctype.
             match = re.search(r'<!DOCTYPE html>|<html.*?>', buffer, re.IGNORECASE | re.DOTALL)
             if match:
                 html_started = True
-                # This slice correctly removes any chatter before the start of the HTML
                 content_to_yield = buffer[match.start():]
                 buffer = ""
                 yield content_to_yield
@@ -81,8 +76,7 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
 
 @app.post("/api/ask-ai")
 async def ask_ai_post(request: Request, body: AskAiPostRequest):
-    ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP): raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    # REMOVED: Rate limit check
     if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
     user_prompt = f"My request is: {body.prompt}"
@@ -94,8 +88,7 @@ async def ask_ai_post(request: Request, body: AskAiPostRequest):
 
 @app.put("/api/ask-ai")
 async def ask_ai_put(request: Request, body: AskAiPutRequest):
-    ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP): raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    # REMOVED: Rate limit check
     if not body.html: raise HTTPException(status_code=400, detail="HTML content is required for an update.")
     if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
     
@@ -103,7 +96,6 @@ async def ask_ai_put(request: Request, body: AskAiPutRequest):
         user_prompt = ""
 
         if body.elementIdToReplace and body.selectedElementHtml:
-            # Case 1: Targeted Element Rewrite
             print(f"INFO: Handling targeted element update for ID: {body.elementIdToReplace}")
             user_prompt = (
                 "You are modifying a single element within an existing HTML file based on the user's request.\n\n"
@@ -113,7 +105,6 @@ async def ask_ai_put(request: Request, body: AskAiPutRequest):
                 f"The user's instruction for the change is: '{body.prompt}'"
             )
         else:
-            # Case 2: Global Page Update
             print("INFO: Handling global page update.")
             user_prompt = (
                 f"The current HTML document is:\n```html\n{body.html}\n```\n\n"
