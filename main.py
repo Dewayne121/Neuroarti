@@ -10,10 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import AsyncGenerator
 
 from core.ai_services import generate_code, stream_code
+from core.element_rewriter import rewrite_element # <-- IMPORT THE NEW SERVICE
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
-    create_follow_up_prompt,
+    FOLLOW_UP_SYSTEM_PROMPT, # Now used only for global updates
     DEFAULT_HTML
 )
 from core.models import MODELS
@@ -47,11 +48,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Streaming Generator for New Builds ---
 async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None]:
-    # This function now receives the coroutine and awaits it inside
     ai_stream = await ai_stream_coroutine
-    
     buffer = ""
     html_started = False
     html_ended = False
@@ -59,9 +57,7 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
     async for chunk in ai_stream:
         if html_ended:
             continue
-
         buffer += chunk
-
         if not html_started:
             match = re.search(r'<!DOCTYPE html>', buffer, re.IGNORECASE)
             if match:
@@ -69,7 +65,6 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
                 content_to_yield = buffer[match.start():]
                 buffer = ""
                 yield content_to_yield
-        
         if html_started:
             end_match = re.search(r'</html>', buffer, re.IGNORECASE)
             if end_match:
@@ -77,13 +72,11 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
                 content_to_yield = buffer[:end_match.end()]
                 yield content_to_yield
                 break
-            
             last_newline = buffer.rfind('\n')
             if last_newline != -1:
                 content_to_yield = buffer[:last_newline + 1]
                 buffer = buffer[last_newline + 1:]
                 yield content_to_yield
-    
     if html_started and not html_ended and buffer:
         yield buffer
 
@@ -92,51 +85,55 @@ async def ask_ai_post(request: Request, body: AskAiPostRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
-    
+    user_prompt = f"My request is: {body.prompt}"
     if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
-    else:
-        user_prompt = body.prompt
-
-    # stream_code is now a regular function that returns a coroutine
-    ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     
-    return StreamingResponse(
-        stream_html_generator(ai_stream_coro),
-        media_type="text/plain; charset=utf-8"
-    )
+    ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
+    return StreamingResponse(stream_html_generator(ai_stream_coro), media_type="text/plain; charset=utf-8")
 
 @app.put("/api/ask-ai")
 async def ask_ai_put(request: Request, body: AskAiPutRequest):
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-
     if not body.html:
         raise HTTPException(status_code=400, detail="HTML content is required for an update.")
-    
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
 
-    system_prompt, user_prompt = create_follow_up_prompt(
-        prompt=body.prompt,
-        html=body.html,
-        selected_element_html=body.selectedElementHtml
-    )
-
-    patch_instructions = await generate_code(system_prompt, user_prompt, body.model)
-    
     try:
-        updated_html = apply_diff_patch(body.html, patch_instructions)
+        updated_html = ""
+        # --- HYBRID LOGIC ---
+        if body.selectedElementHtml:
+            # --- Case 1: Targeted Element Rewrite (More Robust) ---
+            print("INFO: Handling targeted element rewrite.")
+            new_element_html = await rewrite_element(
+                prompt=body.prompt,
+                selected_element_html=body.selectedElementHtml,
+                model=body.model
+            )
+            # Replace the original element with the newly generated one
+            updated_html = body.html.replace(body.selectedElementHtml, new_element_html, 1)
+        else:
+            # --- Case 2: Global Page Update (Using Diff-Patch) ---
+            print("INFO: Handling global page update with diff-patch.")
+            user_prompt = (
+                f"The current HTML document is:\n```html\n{body.html}\n```\n\n"
+                f"My request for a global page update is: '{body.prompt}'"
+            )
+            patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
+            updated_html = apply_diff_patch(body.html, patch_instructions)
+
         return JSONResponse(content={"ok": True, "html": updated_html})
+        
     except Exception as e:
-        print(f"Error applying patch: {e}")
-        raise HTTPException(status_code=500, detail="Failed to apply updates to the HTML.")
+        print(f"Error during update: {e}")
+        # Fallback to prevent breaking the user's page on error
+        raise HTTPException(status_code=500, detail=f"Failed to apply updates: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
