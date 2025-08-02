@@ -5,16 +5,12 @@ import google.generativeai as genai
 from fastapi import HTTPException
 from typing import AsyncGenerator
 from core.models import MODELS
-
 # --- Environment Setup ---
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-
 together_client = AsyncOpenAI(api_key=TOGETHER_API_KEY, base_url="https://api.together.xyz/v1")
-
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-
 # --- Private API Call Functions ---
 async def _generate_with_together(system_prompt: str, user_prompt: str, model_api_id: str, stream: bool = False):
     try:
@@ -38,14 +34,12 @@ async def _generate_with_together(system_prompt: str, user_prompt: str, model_ap
     except Exception as e:
         print(f"Together AI Error: {e}")
         raise HTTPException(status_code=502, detail=f"Together AI service error: {str(e)}")
-
 async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_id: str, stream: bool = False):
     if stream:
         async def stream_placeholder():
             response_text = await _generate_with_google(system_prompt, user_prompt, model_api_id, stream=False)
             yield response_text
         return stream_placeholder()
-
     if not GOOGLE_API_KEY:
         raise HTTPException(status_code=503, detail="Google API key not configured.")
     try:
@@ -58,7 +52,6 @@ async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_
     except Exception as e:
         print(f"Google AI Error: {e}")
         raise HTTPException(status_code=502, detail=f"Google AI service error: {str(e)}")
-
 # --- Public Dispatcher Functions ---
 async def generate_code(system_prompt: str, user_prompt: str, model_key: str) -> str:
     model_config = MODELS.get(model_key)
@@ -72,16 +65,12 @@ async def generate_code(system_prompt: str, user_prompt: str, model_key: str) ->
     provider_func = provider_map.get(model_config["api_provider"])
     if not provider_func:
         raise HTTPException(status_code=500, detail=f"Unknown provider for model '{model_key}'")
-
     return await provider_func(system_prompt, user_prompt, model_config["api_id"], stream=False)
-
-# FIX: This is now a REGULAR function, not an async one.
 def stream_code(system_prompt: str, user_prompt: str, model_key: str):
     """Returns a coroutine that, when awaited, produces an async generator for streaming."""
     model_config = MODELS.get(model_key)
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
-
     provider_map = {
         "together": _generate_with_together,
         "google": _generate_with_google
