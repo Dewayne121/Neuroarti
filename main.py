@@ -1,51 +1,43 @@
 # main.py
 import os
 import uuid
+import re
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from bs4 import BeautifulSoup
+from typing import AsyncGenerator
 
-from core.ai_services import generate_code
-from core.singular_element_service import rewrite_singular_element
-from core.complex_element_service import rewrite_complex_element
+from core.ai_services import generate_code, stream_code
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
-    FOLLOW_UP_SYSTEM_PROMPT,
-    SEARCH_START
+    create_follow_up_prompt, # New dynamic prompt function
+    DEFAULT_HTML
 )
 from core.models import MODELS
 from core.utils import (
     ip_limiter,
     is_the_same_html,
     apply_diff_patch,
-    isolate_and_clean_html,
-    extract_assets,
-    is_singular_element
+    # No longer need extract_assets, as we are working with a single HTML file
 )
 
 load_dotenv()
 
-class BuildRequest(BaseModel):
+# --- Pydantic Models ---
+class AskAiPostRequest(BaseModel):
     prompt: str
     model: str
     html: str | None = None
+    # redesignMarkdown: str | None = None # You could add this later
 
-class UpdateRequest(BaseModel):
+class AskAiPutRequest(BaseModel):
     prompt: str
     model: str
-    html: str 
-    css: str
-    js: str
-    container_id: str
-
-class RewriteRequest(BaseModel):
-    prompt: str
-    model: str
-    selectedElementHtml: str
+    html: str
+    selectedElementHtml: str | None = None # Key for unified updates
 
 app = FastAPI()
 
@@ -57,79 +49,113 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Streaming Generator for New Builds ---
+async def stream_html_generator(ai_stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    """
+    Processes an AI stream, filters for valid HTML, and yields clean chunks.
+    This is the core of chatter prevention for streaming.
+    """
+    buffer = ""
+    html_started = False
+    html_ended = False
+
+    async for chunk in ai_stream:
+        if html_ended:
+            continue  # Stop processing after </html> is found
+
+        buffer += chunk
+
+        if not html_started:
+            # Wait for the HTML to start before yielding anything
+            match = re.search(r'<!DOCTYPE html>', buffer, re.IGNORECASE)
+            if match:
+                html_started = True
+                content_to_yield = buffer[match.start():]
+                buffer = ""  # Clear buffer after yielding
+                yield content_to_yield
+        
+        if html_started:
+            # Once started, check for the end tag
+            end_match = re.search(r'</html>', buffer, re.IGNORECASE)
+            if end_match:
+                html_ended = True
+                content_to_yield = buffer[:end_match.end()]
+                yield content_to_yield
+                break # Terminate the generator
+            
+            # Yield chunks without the end tag, leaving the tail in the buffer
+            last_newline = buffer.rfind('\n')
+            if last_newline != -1:
+                content_to_yield = buffer[:last_newline + 1]
+                buffer = buffer[last_newline + 1:]
+                yield content_to_yield
+    
+    # Yield any remaining part of the buffer if stream ends before </html>
+    if html_started and not html_ended and buffer:
+        yield buffer
+
+
 @app.post("/api/ask-ai")
-async def build_or_full_update(request: Request, body: BuildRequest):
+async def ask_ai_post(request: Request, body: AskAiPostRequest):
+    """
+    Handles initial website generation and full redesigns using a streaming response.
+    """
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
+
+    # Determine if we should provide the existing HTML as context
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
-    user_prompt = f"My request is: {body.prompt}"
+    
     if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
-    ai_response_text = await generate_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
-    clean_html_doc = isolate_and_clean_html(ai_response_text)
-    if not clean_html_doc:
-        raise HTTPException(status_code=500, detail="AI failed to generate valid HTML content.")
-    container_id = f"neuroarti-container-{uuid.uuid4().hex[:8]}"
-    body_html, css, js = extract_assets(clean_html_doc, container_id)
-    return JSONResponse(content={"ok": True, "html": body_html, "css": css, "js": js, "container_id": container_id})
+    else:
+        user_prompt = body.prompt
+
+    ai_stream = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
+    
+    return StreamingResponse(
+        stream_html_generator(ai_stream),
+        media_type="text/plain; charset=utf-8"
+    )
 
 @app.put("/api/ask-ai")
-async def diff_patch_update(request: Request, body: UpdateRequest):
+async def ask_ai_put(request: Request, body: AskAiPutRequest):
+    """
+    Handles all updates: targeted element rewrites and full-page diff-patch updates.
+    This single endpoint replaces the previous PUT and rewrite endpoints.
+    """
     ip = request.client.host
     if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        return JSONResponse(status_code=429, content={"ok": False, "openLogin": True, "message": "Rate limit exceeded."})
-    if not body.html:
-        raise HTTPException(status_code=400, detail="HTML content is required.")
-    if body.model not in MODELS:
-        raise HTTPException(status_code=400, detail="Invalid model selected")
-    user_prompt = f"The current code is:\n```html\n{body.html}\n```\n\nMy request is a global page update: '{body.prompt}'"
-    patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
-    soup = BeautifulSoup(body.html, 'html.parser')
-    original_body_content = ''.join(str(c) for c in soup.body.contents) if soup.body else body.html
-    if not patch_instructions or SEARCH_START not in patch_instructions:
-        return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
-    try:
-        updated_full_html = apply_diff_patch(body.html, patch_instructions)
-        updated_body_content, updated_css, updated_js = extract_assets(updated_full_html, body.container_id)
-        return JSONResponse(content={"ok": True, "html": updated_body_content, "css": updated_css, "js": updated_js, "container_id": body.container_id})
-    except Exception as e:
-        print(f"Error applying patch: {e}")
-        return JSONResponse(content={"ok": True, "html": original_body_content, "css": body.css, "js": body.js, "container_id": body.container_id})
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 
-@app.put("/api/rewrite-element")
-async def rewrite_element_endpoint(request: Request, body: RewriteRequest):
-    ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        return JSONResponse(status_code=429, content={"ok": False, "message": "Rate limit exceeded."})
+    if not body.html:
+        raise HTTPException(status_code=400, detail="HTML content is required for an update.")
+    
     if body.model not in MODELS:
         raise HTTPException(status_code=400, detail="Invalid model selected")
-    if not body.selectedElementHtml:
-        raise HTTPException(status_code=400, detail="A selected element is required for a rewrite.")
+
+    # Generate the system and user prompts dynamically based on the request type
+    system_prompt, user_prompt = create_follow_up_prompt(
+        prompt=body.prompt,
+        html=body.html,
+        selected_element_html=body.selectedElementHtml
+    )
+
+    patch_instructions = await generate_code(system_prompt, user_prompt, body.model)
     
     try:
-        # The main endpoint now acts as a smart router
-        if is_singular_element(body.selectedElementHtml):
-            # Use the service dedicated to simple tags
-            rewritten_html = await rewrite_singular_element(
-                prompt=body.prompt,
-                selected_element_html=body.selectedElementHtml,
-                model=body.model
-            )
-        else:
-            # Use the service dedicated to complex components
-            rewritten_html = await rewrite_complex_element(
-                prompt=body.prompt,
-                selected_element_html=body.selectedElementHtml,
-                model=body.model
-            )
-            
-        return JSONResponse(content={"ok": True, "rewrittenHtml": rewritten_html})
+        updated_html = apply_diff_patch(body.html, patch_instructions)
+        # We return the full HTML, letting the frontend manage it.
+        return JSONResponse(content={"ok": True, "html": updated_html})
     except Exception as e:
-        print(f"Error during element rewrite: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error applying patch: {e}")
+        # Fallback: return original HTML on error to avoid breaking the user's page
+        raise HTTPException(status_code=500, detail="Failed to apply updates to the HTML.")
+
 
 if __name__ == "__main__":
     import uvicorn
