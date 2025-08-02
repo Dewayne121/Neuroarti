@@ -8,10 +8,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from typing import AsyncGenerator
-from bs4 import BeautifulSoup # <-- IMPORT BEAUTIFULSOUP
+from bs4 import BeautifulSoup # <-- Ensure this import is present
 
 from core.ai_services import generate_code, stream_code
-from core.element_rewriter import rewrite_element
+from core.element_rewriter import rewrite_element # <-- Make sure this new service is imported
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
@@ -38,7 +38,7 @@ class AskAiPutRequest(BaseModel):
     model: str
     html: str
     selectedElementHtml: str | None = None
-    elementIdToReplace: str | None = None # <-- NEW: The unique ID for reliable replacement
+    elementIdToReplace: str | None = None # The unique ID for reliable replacement
 
 app = FastAPI()
 
@@ -89,6 +89,7 @@ async def ask_ai_post(request: Request, body: AskAiPostRequest):
     user_prompt = f"My request is: {body.prompt}"
     if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
+    
     ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     return StreamingResponse(stream_html_generator(ai_stream_coro), media_type="text/plain; charset=utf-8")
 
@@ -118,6 +119,7 @@ async def ask_ai_put(request: Request, body: AskAiPutRequest):
             if target_element:
                 # The AI returns just the element, so we need to parse it into a tag
                 new_element_soup = BeautifulSoup(new_element_html, 'lxml')
+                # Find the first actual tag inside the parsed fragment
                 new_tag = new_element_soup.find(lambda tag: tag.name != 'html' and tag.name != 'body')
                 
                 if new_tag:
