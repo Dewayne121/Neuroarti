@@ -8,13 +8,14 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from typing import AsyncGenerator
+from bs4 import BeautifulSoup # <-- IMPORT BEAUTIFULSOUP
 
 from core.ai_services import generate_code, stream_code
-from core.element_rewriter import rewrite_element # <-- IMPORT THE NEW SERVICE
+from core.element_rewriter import rewrite_element
 from core.prompts import (
     MAX_REQUESTS_PER_IP,
     INITIAL_SYSTEM_PROMPT,
-    FOLLOW_UP_SYSTEM_PROMPT, # Now used only for global updates
+    FOLLOW_UP_SYSTEM_PROMPT,
     DEFAULT_HTML
 )
 from core.models import MODELS
@@ -37,6 +38,7 @@ class AskAiPutRequest(BaseModel):
     model: str
     html: str
     selectedElementHtml: str | None = None
+    elementIdToReplace: str | None = None # <-- NEW: The unique ID for reliable replacement
 
 app = FastAPI()
 
@@ -53,10 +55,8 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
     buffer = ""
     html_started = False
     html_ended = False
-
     async for chunk in ai_stream:
-        if html_ended:
-            continue
+        if html_ended: continue
         buffer += chunk
         if not html_started:
             match = re.search(r'<!DOCTYPE html>', buffer, re.IGNORECASE)
@@ -83,56 +83,65 @@ async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None
 @app.post("/api/ask-ai")
 async def ask_ai_post(request: Request, body: AskAiPostRequest):
     ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-    if body.model not in MODELS:
-        raise HTTPException(status_code=400, detail="Invalid model selected")
+    if not ip_limiter(ip, MAX_REQUESTS_PER_IP): raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
     html_context = body.html if body.html and not is_the_same_html(body.html) else None
     user_prompt = f"My request is: {body.prompt}"
     if html_context:
         user_prompt = f"Here is my current HTML code:\n\n```html\n{html_context}\n```\n\nNow, please create a new design based on this HTML and my request: {body.prompt}"
-    
     ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     return StreamingResponse(stream_html_generator(ai_stream_coro), media_type="text/plain; charset=utf-8")
 
 @app.put("/api/ask-ai")
 async def ask_ai_put(request: Request, body: AskAiPutRequest):
     ip = request.client.host
-    if not ip_limiter(ip, MAX_REQUESTS_PER_IP):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-    if not body.html:
-        raise HTTPException(status_code=400, detail="HTML content is required for an update.")
-    if body.model not in MODELS:
-        raise HTTPException(status_code=400, detail="Invalid model selected")
+    if not ip_limiter(ip, MAX_REQUESTS_PER_IP): raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    if not body.html: raise HTTPException(status_code=400, detail="HTML content is required for an update.")
+    if body.model not in MODELS: raise HTTPException(status_code=400, detail="Invalid model selected")
 
     try:
         updated_html = ""
         # --- HYBRID LOGIC ---
-        if body.selectedElementHtml:
+        if body.elementIdToReplace and body.selectedElementHtml:
             # --- Case 1: Targeted Element Rewrite (More Robust) ---
-            print("INFO: Handling targeted element rewrite.")
+            print(f"INFO: Handling targeted element rewrite for ID: {body.elementIdToReplace}")
             new_element_html = await rewrite_element(
                 prompt=body.prompt,
                 selected_element_html=body.selectedElementHtml,
                 model=body.model
             )
-            # Replace the original element with the newly generated one
-            updated_html = body.html.replace(body.selectedElementHtml, new_element_html, 1)
+            
+            # Use BeautifulSoup for reliable replacement
+            soup = BeautifulSoup(body.html, 'lxml')
+            target_element = soup.find(id=body.elementIdToReplace)
+            
+            if target_element:
+                # The AI returns just the element, so we need to parse it into a tag
+                new_element_soup = BeautifulSoup(new_element_html, 'lxml')
+                new_tag = new_element_soup.find(lambda tag: tag.name != 'html' and tag.name != 'body')
+                
+                if new_tag:
+                    # Remove the temporary ID before inserting
+                    if 'id' in new_tag.attrs and new_tag['id'] == body.elementIdToReplace:
+                        del new_tag['id']
+                    target_element.replace_with(new_tag)
+                    updated_html = str(soup)
+                else: # AI failed to return a valid tag
+                    raise Exception("AI did not return a valid HTML element for replacement.")
+            else: # Couldn't find the temp ID
+                raise Exception(f"Could not find element with temporary ID: {body.elementIdToReplace}")
+
         else:
             # --- Case 2: Global Page Update (Using Diff-Patch) ---
             print("INFO: Handling global page update with diff-patch.")
-            user_prompt = (
-                f"The current HTML document is:\n```html\n{body.html}\n```\n\n"
-                f"My request for a global page update is: '{body.prompt}'"
-            )
+            user_prompt = (f"The current HTML document is:\n```html\n{body.html}\n```\n\nMy request for a global page update is: '{body.prompt}'")
             patch_instructions = await generate_code(FOLLOW_UP_SYSTEM_PROMPT, user_prompt, body.model)
             updated_html = apply_diff_patch(body.html, patch_instructions)
 
         return JSONResponse(content={"ok": True, "html": updated_html})
         
     except Exception as e:
-        print(f"Error during update: {e}")
-        # Fallback to prevent breaking the user's page on error
+        print(f"ERROR during update: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to apply updates: {str(e)}")
 
 if __name__ == "__main__":
