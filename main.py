@@ -48,12 +48,15 @@ app.add_middleware(
 )
 
 # --- Streaming Generator for New Builds ---
-async def stream_html_generator(ai_stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+async def stream_html_generator(ai_stream_coroutine) -> AsyncGenerator[str, None]:
+    # This function now receives the coroutine and awaits it inside
+    ai_stream = await ai_stream_coroutine
+    
     buffer = ""
     html_started = False
     html_ended = False
 
-    async for chunk in ai_stream: # This loop was causing the error
+    async for chunk in ai_stream:
         if html_ended:
             continue
 
@@ -100,11 +103,11 @@ async def ask_ai_post(request: Request, body: AskAiPostRequest):
     else:
         user_prompt = body.prompt
 
-    # FIX: Do NOT await here. We need the generator object, not its result.
-    ai_stream_generator = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
+    # stream_code is now a regular function that returns a coroutine
+    ai_stream_coro = stream_code(INITIAL_SYSTEM_PROMPT, user_prompt, body.model)
     
     return StreamingResponse(
-        stream_html_generator(ai_stream_generator),
+        stream_html_generator(ai_stream_coro),
         media_type="text/plain; charset=utf-8"
     )
 
