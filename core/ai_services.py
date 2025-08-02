@@ -39,9 +39,6 @@ async def _generate_with_together(system_prompt: str, user_prompt: str, model_ap
         raise HTTPException(status_code=502, detail=f"Together AI service error: {str(e)}")
 
 async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_id: str, stream: bool = False):
-    # Google's streaming implementation might differ, this is a general idea.
-    # For now, let's keep it non-streaming for simplicity unless streaming is critical for Google models.
-    # The SDK's generate_content_async(stream=True) would be used here.
     if stream:
         # Placeholder for actual Google stream implementation
         async def stream_placeholder():
@@ -64,7 +61,6 @@ async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_
 
 # --- Public Dispatcher Functions ---
 async def generate_code(system_prompt: str, user_prompt: str, model_key: str) -> str:
-    """Generates code and returns the complete response as a string."""
     model_config = MODELS.get(model_key)
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
@@ -76,15 +72,18 @@ async def generate_code(system_prompt: str, user_prompt: str, model_key: str) ->
     else:
         raise HTTPException(status_code=500, detail=f"Unknown provider for model '{model_key}'")
 
-async def stream_code(system_prompt: str, user_prompt: str, model_key: str) -> AsyncGenerator[str, None]:
-    """Generates code and returns an async generator for streaming."""
+def stream_code(system_prompt: str, user_prompt: str, model_key: str) -> AsyncGenerator[str, None]:
+    """
+    Returns an async generator for streaming. Note: This function is NOT async itself.
+    """
     model_config = MODELS.get(model_key)
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
 
+    # FIX: Return the coroutine that creates the generator, don't await it.
     if model_config["api_provider"] == "together":
-        return await _generate_with_together(system_prompt, user_prompt, model_config["api_id"], stream=True)
+        return _generate_with_together(system_prompt, user_prompt, model_config["api_id"], stream=True)
     elif model_config["api_provider"] == "google":
-        return await _generate_with_google(system_prompt, user_prompt, model_config["api_id"], stream=True)
+        return _generate_with_google(system_prompt, user_prompt, model_config["api_id"], stream=True)
     else:
         raise HTTPException(status_code=500, detail=f"Unknown provider for model '{model_key}'")
