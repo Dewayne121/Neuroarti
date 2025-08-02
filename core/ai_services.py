@@ -31,8 +31,9 @@ async def _generate_with_together(system_prompt: str, user_prompt: str, model_ap
                     content = chunk.choices[0].delta.content
                     if content:
                         yield content
-            return stream_generator()
+            return stream_generator() # This returns the async generator function
         else:
+            # This is not a stream, so we await the single result
             return response_stream.choices[0].message.content or ""
     except Exception as e:
         print(f"Together AI Error: {e}")
@@ -40,7 +41,6 @@ async def _generate_with_together(system_prompt: str, user_prompt: str, model_ap
 
 async def _generate_with_google(system_prompt: str, user_prompt: str, model_api_id: str, stream: bool = False):
     if stream:
-        # Placeholder for actual Google stream implementation
         async def stream_placeholder():
             response_text = await _generate_with_google(system_prompt, user_prompt, model_api_id, stream=False)
             yield response_text
@@ -65,25 +65,30 @@ async def generate_code(system_prompt: str, user_prompt: str, model_key: str) ->
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
     
-    if model_config["api_provider"] == "together":
-        return await _generate_with_together(system_prompt, user_prompt, model_config["api_id"], stream=False)
-    elif model_config["api_provider"] == "google":
-        return await _generate_with_google(system_prompt, user_prompt, model_config["api_id"], stream=False)
-    else:
+    provider_map = {
+        "together": _generate_with_together,
+        "google": _generate_with_google
+    }
+    provider_func = provider_map.get(model_config["api_provider"])
+    if not provider_func:
         raise HTTPException(status_code=500, detail=f"Unknown provider for model '{model_key}'")
 
-def stream_code(system_prompt: str, user_prompt: str, model_key: str) -> AsyncGenerator[str, None]:
-    """
-    Returns an async generator for streaming. Note: This function is NOT async itself.
-    """
+    return await provider_func(system_prompt, user_prompt, model_config["api_id"], stream=False)
+
+# FIX: This is now a REGULAR function, not an async one.
+def stream_code(system_prompt: str, user_prompt: str, model_key: str):
+    """Returns a coroutine that, when awaited, produces an async generator for streaming."""
     model_config = MODELS.get(model_key)
     if not model_config:
         raise HTTPException(status_code=400, detail=f"Invalid model key: {model_key}")
 
-    # FIX: Return the coroutine that creates the generator, don't await it.
-    if model_config["api_provider"] == "together":
-        return _generate_with_together(system_prompt, user_prompt, model_config["api_id"], stream=True)
-    elif model_config["api_provider"] == "google":
-        return _generate_with_google(system_prompt, user_prompt, model_config["api_id"], stream=True)
-    else:
+    provider_map = {
+        "together": _generate_with_together,
+        "google": _generate_with_google
+    }
+    provider_func = provider_map.get(model_config["api_provider"])
+    if not provider_func:
         raise HTTPException(status_code=500, detail=f"Unknown provider for model '{model_key}'")
+    
+    # Return the coroutine itself, NOT the awaited result.
+    return provider_func(system_prompt, user_prompt, model_config["api_id"], stream=True)
